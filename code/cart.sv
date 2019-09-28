@@ -31,70 +31,70 @@ logic [31:0] address_offset;
 logic [2:0] cart_cs_reg;
 logic [3:0] bank_mask;
 
-always_comb begin
-	hardware_map = '{3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0};
-	bank_map = '{4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0};
-	bank_type = 3'b000;
-	address_offset = 32'd0;
-	bank_mask = 4'b1111;
+always_ff @(negedge clock) begin
+	hardware_map <= '{3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0};
+	bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0};
+	bank_type <= 3'b000;
+	address_offset <= 32'd0;
+	bank_mask <= 4'b1111;
 
 	// Banking mode selector
 	if (cart_flags[8]) begin                                   // Activision
-		hardware_map = '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
-		bank_map = '{4'd0, 4'd0, 4'd13, 4'd12, 4'd15, 4'd0, 4'd0, 4'd14};
-		bank_map[5] = {bank_reg[2:0], 1'b0};
-		bank_map[6] = {bank_reg[2:0], 1'b1};
-		bank_type = 3'd1;
+		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
+		bank_map <= '{4'd0, 4'd0, 4'd13, 4'd12, 4'd15, 4'd0, 4'd0, 4'd14};
+		bank_map[5] <= {bank_reg[2:0], 1'b0};
+		bank_map[6] <= {bank_reg[2:0], 1'b1};
+		bank_type <= 3'd1;
 	end else if (cart_flags[9]) begin                           // Absolute
-		hardware_map = '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
-		bank_map = '{4'd0, 4'd0, 4'd0, 4'd0, 4'd2, 4'd2, 4'd3, 4'd3};
-		bank_map[2] = {3'b000, |bank_reg[1:0]};
-		bank_map[3] = {3'b000, |bank_reg[1:0]};
-		bank_type = 3'd0;
+		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
+		bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd2, 4'd2, 4'd3, 4'd3};
+		bank_map[2] <= {3'b000, |bank_reg[1:0]};
+		bank_map[3] <= {3'b000, |bank_reg[1:0]};
+		bank_type <= 3'd0;
 	end else if (cart_flags[3] || cart_size > 32'h20000) begin  // SuperGame 9 bank
-		hardware_map = '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
-		bank_map = '{4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd8, 4'd8};
-		bank_map[4] = bank_reg[3:0] + 1'b1;
-		bank_map[5] = bank_reg[3:0] + 1'b1;
-		bank_type = 3'd0;
+		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
+		bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd8, 4'd8};
+		bank_map[4] <= bank_reg[3:0] + 1'b1;
+		bank_map[5] <= bank_reg[3:0] + 1'b1;
+		bank_type <= 3'd0;
 	end else if (cart_flags[1] || cart_size >= 32'h10000) begin // SuperGame
-		hardware_map = '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
-		bank_map = '{4'd0, 4'd0, 4'd6, 4'd6, 4'd0, 4'd0, 4'd7, 4'd7};
-		bank_map[4] = bank_reg[3:0];
-		bank_map[5] = bank_reg[3:0];
-		bank_mask = (cart_size == 32'h10000) ? 4'b0011 : 4'b0111; // 64k carts have 4 banks mirrored
-		bank_type = 3'd0;
+		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
+		bank_map <= '{4'd0, 4'd0, 4'd6, 4'd6, 4'd0, 4'd0, 4'd7, 4'd7};
+		bank_map[4] <= bank_reg[3:0];
+		bank_map[5] <= bank_reg[3:0];
+		bank_mask <= (cart_size == 32'h10000) ? 4'b0011 : 4'b0111; // 64k carts have 4 banks mirrored
+		bank_type <= 3'd0;
 	end else begin                                     // Not banked
 		if (cart_size <= 32'h2000) // A7808
-			hardware_map = '{3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd1};
+			hardware_map <= '{3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd1};
 		else if (cart_size <= 32'h4000) // A7816
-			hardware_map = '{3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd1, 3'd1};
+			hardware_map <= '{3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd1, 3'd1};
 		else if (cart_size <= 32'h8000) // A7832
-			hardware_map = '{3'd0, 3'd0, 3'd0, 3'd0, 3'd1, 3'd1, 3'd1, 3'd1};
+			hardware_map <= '{3'd0, 3'd0, 3'd0, 3'd0, 3'd1, 3'd1, 3'd1, 3'd1};
 		else if (cart_size <= 32'hC000) // A7848
-			hardware_map = '{3'd0, 3'd0, 3'd0, 3'd1, 3'd1, 3'd1, 3'd1, 3'd1};
-		address_offset = (cart_size - 1'd1) <= 32'hFFFF ? 32'hFFFF - (cart_size - 1'd1) : 32'd0;
-		bank_type = 3'd2;
+			hardware_map <= '{3'd0, 3'd0, 3'd0, 3'd1, 3'd1, 3'd1, 3'd1, 3'd1};
+		address_offset <= (cart_size - 1'd1) <= 32'hFFFF ? 32'hFFFF - (cart_size - 1'd1) : 32'd0;
+		bank_type <= 3'd2;
 	end
 
 	// 450 POKEY
 	if (cart_flags[6]) begin // POKEY at $450
-		hardware_map[0] = 3'd2;
+		hardware_map[0] <= 3'd2;
 	end
 
 	// Alternative hardware at $4k selector
 	if (cart_flags[0]) begin // POKEY at $4k
-		hardware_map[2] = 3'd2;
-		hardware_map[3] = 3'd2;
+		hardware_map[2] <= 3'd2;
+		hardware_map[3] <= 3'd2;
 	end else if (cart_flags[2]) begin // Supergame RAM at $4k
-		hardware_map[2] = 3'd3;
-		hardware_map[3] = 3'd3;
+		hardware_map[2] <= 3'd3;
+		hardware_map[3] <= 3'd3;
 	end else if (cart_flags[5]) begin // Banked RAM at $4k
-		hardware_map[2] = 3'd3;
-		hardware_map[3] = 3'd3;
+		hardware_map[2] <= 3'd3;
+		hardware_map[3] <= 3'd3;
 	end else if (cart_flags[7]) begin // Mirror RAM at $4k
-		hardware_map[2] = 3'd3;
-		hardware_map[3] = 3'd3;
+		hardware_map[2] <= 3'd3;
+		hardware_map[3] <= 3'd3;
 	end /*else if (cart_flags[4]) begin // Bank 6 at $4k
 		hardware_map[2] = 3'd4;
 		hardware_map[3] = 3'd4;
@@ -140,7 +140,7 @@ end
 //m_bank_mask = (size / 0x4000) - 1
 //m_base_rom = 0x10000 - size;
 
-always_latch begin
+always_ff @(posedge clock) begin
 	if (reset) begin
 		bank_reg <= 4'd0;
 	end else if (~rw & cart_cs) begin

@@ -1,5 +1,5 @@
 //============================================================================
-//  SNES for MiSTer
+//  Atari 7800 for MiSTer
 //  Copyright (C) 2017,2018 Srg320
 //  Copyright (C) 2018 Sorgelig
 //
@@ -28,7 +28,7 @@ module emu
 	input         RESET,
 
 	//Must be passed to hps_io module
-	inout  [44:0] HPS_BUS,
+	inout  [45:0] HPS_BUS,
 
 	//Base video clock. Usually equals to CLK_SYS.
 	output        CLK_VIDEO,
@@ -48,7 +48,7 @@ module emu
 	output        VGA_VS,
 	output        VGA_DE,    // = ~(VBlank | HBlank)
 	output        VGA_F1,
-	output [1:0]  VGA_SL,
+	output  [1:0] VGA_SL,
 
 	output        LED_USER,  // 1 - ON, 0 - OFF.
 
@@ -58,13 +58,20 @@ module emu
 	output  [1:0] LED_POWER,
 	output  [1:0] LED_DISK,
 
+	// I/O board button press simulation (active high)
+	// b[1]: user button
+	// b[0]: osd button
+	output  [1:0] BUTTONS,
+
 	output [15:0] AUDIO_L,
 	output [15:0] AUDIO_R,
 	output        AUDIO_S, // 1 - signed audio samples, 0 - unsigned
 	output  [1:0] AUDIO_MIX, // 0 - no mix, 1 - 25%, 2 - 50%, 3 - 100% (mono)
-	input         TAPE_IN,
 
-	// SD-SPI
+	//ADC
+	inout   [3:0] ADC_BUS,
+
+	//SD-SPI
 	output        SD_SCK,
 	output        SD_MOSI,
 	input         SD_MISO,
@@ -102,8 +109,23 @@ module emu
 	input         UART_RXD,
 	output        UART_TXD,
 	output        UART_DTR,
-	input         UART_DSR
+	input         UART_DSR,
+
+	// Open-drain User port.
+	// 0 - D+/RX
+	// 1 - D-/TX
+	// 2..6 - USR2..USR6
+	// Set USER_OUT to 1 to read from USER_IN.
+	input   [6:0] USER_IN,
+	output  [6:0] USER_OUT,
+
+	input         OSD_STATUS
 );
+
+assign ADC_BUS   = 'Z;
+
+assign BUTTONS   = 0;
+assign USER_OUT  = '1;
 
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 
@@ -119,8 +141,10 @@ assign VIDEO_ARY = status[8] ? 8'd9  : 8'd3;
 
 assign {SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 6'b111111;
 assign SDRAM_DQ = 'Z;
+assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
+
 
 ///////////////////////  CLOCK/RESET  ///////////////////////////////////
 
@@ -132,8 +156,8 @@ pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
-	.outclk_0(clk_vid),
-	.outclk_1(clk_sys),
+	.outclk_0(clk_sys),
+	.outclk_1(clk_vid),
 	.locked(clock_locked)
 );
 
@@ -387,12 +411,11 @@ assign idump = {padb_0, padb_1, pada_0, pada_1}; // // P2 F1, P2 F2, P1 F1, P1 F
 
 ////////////////////////////  VIDEO  ////////////////////////////////////
 
-wire [4:0] R,G,B;
-wire HSync, HSYNC;
-wire VSync, VSYNC;
+wire [3:0] R,G,B;
+wire HSync;
+wire VSync;
 wire HBlank;
 wire VBlank;
-wire ce_pix = 1'b1;
 
 
 assign VGA_F1 = 1'b0;
@@ -403,7 +426,9 @@ wire [2:0] scale = status[11:9];
 wire [2:0] sl = scale ? scale - 1'd1 : 3'd0;
 wire       scandoubler = (scale || forced_scandoubler);
 
-video_mixer #(.LINE_LENGTH(520)) video_mixer
+wire ce_pix = clk_sys;
+
+video_mixer video_mixer
 (
 	.*,
 
@@ -414,9 +439,9 @@ video_mixer #(.LINE_LENGTH(520)) video_mixer
 	.hq2x(scale==1),
 	.mono(0),
 
-	.R({R,R[4:2]}),
-	.G({G,G[4:2]}),
-	.B({B,B[4:2]})
+	.R({R,R}),
+	.G({G,G}),
+	.B({B,B})
 );
 
 endmodule

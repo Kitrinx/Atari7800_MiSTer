@@ -44,9 +44,9 @@ output logic [7:0] PAout, PBout
 	assign bios_DB_out = bios_out;
 //	assign cart_DB_out = cart_out;
 
-	//////////////
+	/////////////
 	// Signals //
-	////////////
+	/////////////
 
 	// Clock Signals
 	logic             pclk_2, tia_clk, sel_slow_clock;
@@ -60,7 +60,7 @@ output logic [7:0] PAout, PBout
 	logic                   m_int_b, maria_RDY;
 	logic                   maria_rw;
 	logic                   halt_b, maria_drive_AB;
-	logic [7:0]             uv_display, uv_maria, uv_tia;
+	logic [7:0]             uv_maria, uv_tia;
 	logic [15:0]            maria_AB_out;
 
 	// TIA Signals
@@ -88,10 +88,9 @@ output logic [7:0] PAout, PBout
 
 	// Buses
 	// AB and RW defined in port declaration
-	logic  [7:0]           read_DB, write_DB;
+	logic [7:0] read_DB, write_DB;
 
-	logic [7:0]            tia_DB_out, riot_DB_out, maria_DB_out,
-								ram0_DB_out, ram1_DB_out, bios_DB_out, cart_DB_out;
+	logic [7:0] tia_DB_out, riot_DB_out, maria_DB_out, ram0_DB_out, ram1_DB_out, bios_DB_out, cart_DB_out;
 
 	`chipselect       CS_maria_buf, CS_core_buf, CS_buf, CS;
 
@@ -183,88 +182,62 @@ output logic [7:0] PAout, PBout
 	// Clock
 	assign pclk_2 = ~pclk_0;
 
-	assign VSync = vga_vsync;
-	assign HSync = vga_hsync;
-	assign HBlank = (vga_col > 639);
-	assign VBlank = (vga_row > 479);
-
-	// VGA
-	uv_to_vga vga_out(
-		.clk(clock_25), .reset(reset),
-		.uv_in(uv_display),
-		.row(vga_row), .col(vga_col),
-		.RED(RED), .GREEN(GREEN), .BLUE(BLUE),
-		.HSync(vga_hsync), .VSync(vga_vsync),
-		.tia_en(tia_en),
-		.tia_hblank(hblank_tia),
-		.tia_vblank(vblank_tia),
-		.tia_clk(tia_clk)
-	);
-
-	// VIDEO
-	always_comb case ({maria_en, tia_en})
-		2'b00: uv_display = uv_maria;
-		2'b01: uv_display = uv_tia;
-		2'b10: uv_display = uv_maria;
-		2'b11: uv_display = uv_tia;
-		default: uv_display = uv_maria;
-	endcase
-
 	// MARIA
 	maria maria_inst(
-		.AB_in(AB),
-		.AB_out(maria_AB_out),
-		.drive_AB(maria_drive_AB),
-		.read_DB_in(read_DB),
-		.write_DB_in(write_DB),
-		.DB_out(maria_DB_out),
-		.bios_en(~bios_en_b),
-		.reset(reset),
-		.sysclk(sysclk_7_143),
-		.pclk_2(pclk_2),
-		.sel_slow_clock(sel_slow_clock),
-		.core_latch_data(core_latch_data),
-		.tia_en(tia_en),
-		.tia_clk(tia_clk),
-		.pclk_0(pclk_0),
-		.CS(CS),
-		//.ram0_b(ram0_cs_b),
-		//.ram1_b(ram1_cs_b),
-		//.p6532_b(riot_cs_b),
-		//.tia_b(tia_cs_b),
-		//.riot_ram_b(riot_RS_b),
-		.RW(RW),
-		.enable(maria_en),
-		.vga_row(vga_row),
-		.vga_col(vga_col),
-		.UV_out(uv_maria),
-		.int_b(m_int_b),
-		.halt_b(halt_b),
-		.ready(maria_RDY)
+		.AB_in           (AB),
+		.AB_out          (maria_AB_out),
+		.drive_AB        (maria_drive_AB),
+		.read_DB_in      (read_DB),
+		.write_DB_in     (write_DB),
+		.DB_out          (maria_DB_out),
+		.bios_en         (~bios_en_b),
+		.reset_s         (reset),
+		.sysclk          (sysclk_7_143),
+		.pclk_2          (pclk_2),
+		.sel_slow_clock  (sel_slow_clock),
+		.core_latch_data (core_latch_data),
+		.tia_en          (tia_en),
+		.tia_clk         (tia_clk),
+		.pclk_0          (pclk_0),
+		.CS              (CS),
+		.RW              (RW),
+		.enable          (maria_en),
+		.UV_out          (uv_maria),
+		.int_b           (m_int_b),
+		.halt_b          (halt_b),
+		.ready           (maria_RDY),
+		.red             (RED),
+		.green           (GREEN),
+		.blue            (BLUE),
+		.vsync           (VSync),
+		.vblank          (VBlank),
+		.hsync           (HSync),
+		.hblank          (HBlank)
 	);
 
 	// TIA
-	TIA tia_inst(.A({(AB[5] & tia_en), AB[4:0]}), // Address bus input
-		.Din(write_DB), // Data bus input
-		.Dout(tia_DB_out), // Data bus output
-		.CS_n({2'b0,~tia_cs}), // Active low chip select input
-		.CS(tia_cs), // Chip select input
-		.R_W_n(RW), // Active low read/write input
-		.RDY(tia_RDY), // CPU ready output
-		.MASTERCLK(tia_clk), // 3.58 Mhz pixel clock input
-		.CLK2(pclk_0), // 1.19 Mhz bus clock input
-		.idump_in(idump), // Dumped I/O
-		.Ilatch(ilatch), // Latched I/O
-		.HSYNC(tia_hsync),        // Video horizontal sync output
-		.HBLANK(hblank_tia), // Video horizontal blank output
-		.VSYNC(tia_vsync),        // Video vertical sync output
-		.VBLANK(vblank_tia), // Video vertical sync output
-		.COLOROUT(uv_tia), // Indexed color output
-		.RES_n(~reset), // Active low reset input
-		.AUD0(aud0), //audio pin 0
-		.AUD1(aud1), //audio pin 1
-		.audv0(audv0), //audio volume for use with external xformer module
-		.audv1(audv1) //audio volume for use with external xformer module
+	TIA tia_inst(
+		.A({(AB[5] & tia_en), AB[4:0]}), // Address bus input
+		.Din(write_DB),                  // Data bus input
+		.Dout(tia_DB_out),               // Data bus output
+		.CS_n({2'b0,~tia_cs}),           // Active low chip select input
+		.CS(tia_cs),                     // Chip select input
+		.R_W_n(RW),                      // Active low read/write input
+		.RDY(tia_RDY),                   // CPU ready output
+		.MASTERCLK(tia_clk),             // 3.58 Mhz pixel clock input
+		.CLK2(pclk_0),                   // 1.19 Mhz bus clock input
+		.idump_in(idump),                // Dumped I/O
+		.Ilatch(ilatch),                 // Latched I/O
+		.HSYNC(tia_hsync),               // Video horizontal sync output
+		.HBLANK(hblank_tia),             // Video horizontal blank output
+		.VSYNC(tia_vsync),               // Video vertical sync output
+		.VBLANK(vblank_tia),             // Video vertical sync output
+		.COLOROUT(uv_tia),               // Indexed color output
+		.RES_n(~reset),                  // Active low reset input
+		.AUD0(aud0),                     //audio pin 0
+		.AUD1(aud1),                     //audio pin 1
+		.audv0(audv0),                   //audio volume for use with external xformer module
+		.audv1(audv1)                    //audio volume for use with external xformer module
 	);
 
 	audio_xformer audio_xformer
@@ -325,24 +298,9 @@ M6502C cpu_inst
 	.IRQ(~IRQ_n),
 	.NMI(CPU_NMI),
 	.RDY(RDY),
-	.halt_b(core_halt_b)
+	.halt_b(core_halt_b),
+	.latch_data(core_latch_data)
 );
-
-
-// A6502C cpu_inst
-// (
-// 	.clk(pclk_0),
-// 	.sysclk(sysclk_7_143),
-// 	.reset(reset),
-// 	.AB(core_AB_out),
-// 	.DB_IN(read_DB),
-// 	.DB_OUT(core_DB_out),
-// 	.RD(RW),
-// 	.IRQ(~IRQ_n),
-// 	.NMI(CPU_NMI),
-// 	.RDY(RDY),
-// 	.halt_b(core_halt_b)
-// );
 
 assign ld[6] = tia_en;
 assign ld[7] = maria_en;
@@ -362,7 +320,6 @@ ctrl_reg ctrl
 	.tia_en_out(tia_en),
 	.writes(ctrl_writes)
 );
-
 
 cart cart
 (
@@ -422,7 +379,6 @@ module audio_xformer
 
 logic [15:0] audio0,audio1;
 
-
 assign AUD_SIGNAL = audio0 + audio1;
 
 always_comb begin
@@ -450,7 +406,8 @@ module M6502C
 	input IRQ,              // interrupt request
 	input NMI,              // non-maskable interrupt request
 	input RDY,              // Ready signal. Pauses CPU when RDY=0
-	input halt_b
+	input halt_b,           // halt!
+	input latch_data        // ???
 );
 
 logic res;
@@ -458,23 +415,55 @@ logic rdy_in;
 logic WE_OUT;
 logic WE, holding;
 logic [7:0] DB_hold;
+logic old_clk;
 
 cpu core
 (
-	.clk(clk),
-	.reset(reset),
-	.AB(AB),
-	.DI(DB_hold),
-	.DO(DB_OUT),
-	.WE(WE_OUT),
-	.IRQ(IRQ),
-	.NMI(NMI),
-	.RDY(rdy_in),
-	.res(res)
+	.clk   (clk),
+	.reset (reset),
+	.AB    (AB),
+	.DI    (DB_hold),
+	.DO    (DB_OUT),
+	.WE    (WE_OUT),
+	.IRQ   (IRQ),
+	.NMI   (NMI),
+	.RDY   (rdy_in),
+	.res   (res)
 );
 
+logic [15:0] AB2;
+wire [7:0] DB_OUT2;
+logic WE_OUT2;
+
+T65 cpu (
+	.mode (0),
+	.BCD_en(1),
+
+	.Res_n(~reset),
+	.Clk(sysclk),
+	.Enable(~old_clk & clk),
+	.Rdy(rdy_in),
+
+	.IRQ_n(~IRQ),
+	.NMI_n(~NMI),
+	.R_W_n(WE_OUT2),
+	.A(AB2),
+	.DI(~WE_OUT2 ? DB_OUT2 : DB_hold),
+	.DO(DB_OUT2)
+);
+
+// The purpose of res appears to be to align Maria to the reset vector
+// always @(posedge sysclk)
+// 	if (reset)
+// 		res <= 1;
+// 	else if (AB == 16'hFFFD)
+// 		res <= 0;
+
+always @(posedge sysclk)
+	old_clk <= clk;
+
 assign RD = ~(WE & ~res & ~reset);
-assign WE = WE_OUT & rdy_in; //& ~core_latch_data;
+assign WE = WE_OUT & rdy_in;// & ~latch_data;
 
 assign DB_hold = (holding) ? DB_hold : DB_IN;
 
@@ -482,65 +471,10 @@ assign holding = ~rdy_in;
 
 always_ff @(negedge clk, posedge reset)
 	if (reset)
-	   rdy_in <= 1'b1;
+		rdy_in <= 1'b1;
 	else if (halt_b & RDY)
 		rdy_in <= 1'b1;
 	else
 		rdy_in <= 1'b0;
 
 endmodule: M6502C
-
-// module A6502C
-// (
-// 	input clk,              // CPU clock
-// 	input sysclk,           // MARIA Clock
-// 	input reset,            // reset signal
-// 	output [15:0] AB,       // address bus
-// 	input  [7:0] DB_IN,     // data in,
-// 	output [7:0] DB_OUT,    // data_out,
-// 	output RD,              // read enable
-// 	input IRQ,              // interrupt request
-// 	input NMI,              // non-maskable interrupt request
-// 	input RDY,              // Ready signal. Pauses CPU when RDY=0
-// 	input halt_b            // halts CPU control to allow Maria to drive
-// );
-
-// logic res;
-// logic rdy_in;
-// logic WE_OUT;
-// logic WE, holding;
-// logic [7:0] DB_hold;
-
-// cpu_65xx #(
-// 	.pipelineOpcode("\false"),
-// 	.pipelineAluMux("\false"),
-// 	.pipelineAluOut("\false")
-// ) cpu_core (
-// 	.clk(clk),
-// 	.enable(1'b1),
-// 	.halt(~rdy_in),
-// 	.reset(reset),
-// 	.nmi_n(~NMI),
-// 	.irq_n(~IRQ),
-// 	.d(DB_hold),
-// 	.q(DB_OUT),
-// 	.addr(AB),
-// 	.we(WE_OUT)
-// );
-
-// assign RD = ~(WE & ~reset);
-// assign WE = ~WE_OUT & rdy_in;
-
-// assign DB_hold = (holding) ? DB_hold : DB_IN;
-
-// assign holding = ~rdy_in;
-
-// always_ff @(negedge clk, posedge reset)
-// 	if (reset)
-// 		rdy_in <= 1'b1;
-// 	else if (halt_b & RDY)
-// 		rdy_in <= 1'b1;
-// 	else
-// 		rdy_in <= 1'b0;
-
-// endmodule: A6502C

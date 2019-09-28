@@ -76,11 +76,13 @@ module memory_map (
             // 0020-003F, 0120-003F, 0220-023F, 0320-033F
             // All ranges are mirrors of the same registers
             16'b0000_00xx_001x_xxxx: cs = `CS_MARIA;
+				default: cs = `CS_CART;
             
       endcase else casex (AB)
             16'bxxx0_xx0x_1xxx_xxxx: cs = `CS_RIOT_RAM;
             16'bxxx0_xx1x_1xxx_xxxx: cs = `CS_RIOT_IO;
             16'bxxx0_xxxx_0xxx_xxxx: cs = `CS_TIA;
+				default: cs = `CS_CART;
       endcase
       
       if (bios_en & AB[15])

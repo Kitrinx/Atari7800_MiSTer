@@ -17,7 +17,7 @@ module maria(
    //inout wire [15:0]  AB,
 
    // Clocking
-   input logic        reset,
+   input logic        reset_s,
    input logic        sysclk, vidclk, pclk_2,
    output logic       tia_clk, pclk_0, sel_slow_clock,
 
@@ -32,7 +32,6 @@ module maria(
    input logic        RW, enable,
 
    // VGA Interface
-   input logic [9:0]  vga_row, vga_col,
    output logic [7:0] UV_out,
    output logic [3:0] red, green, blue,
    output logic hsync, vsync, hblank, vblank,
@@ -98,6 +97,8 @@ SYNC	video sync output
    logic [7:0]       char_base;
    logic [15:0]      ZP;
 
+   logic [9:0] vga_row, vga_col;
+
    //// Signals from memory_map to timing_ctrl
    logic             deassert_ready, zp_written;
 
@@ -118,8 +119,24 @@ SYNC	video sync output
    //// Control signals between timing_ctrl and line_ram
    logic             lram_swap;
    
-   logic             VBLANK;
    
+   logic reset;
+   logic [3:0] reset_delay;
+
+   assign reset = reset_s;
+
+	// always @(posedge sysclk)
+   // if (reset_s) begin
+   //    reset_delay <= 0;
+   //    reset <= 1;
+   // end else begin
+   //    if (reset_delay < 4)
+   //       reset_delay <= reset_delay + 4'd1;
+   //    else
+   //       reset <= 0;
+   // end
+
+
    line_ram line_ram_inst(
       .SYSCLK(sysclk), .RESET(reset),
       .PLAYBACK(UV_out),
@@ -137,7 +154,7 @@ SYNC	video sync output
       .COLOR_KILL(ctrl[7]),
       // Control signals from timing_ctrl
       .LRAM_SWAP(lram_swap),
-      .LRAM_OUT_COL(vga_col[9:1])
+      .LRAM_OUT_COL(vga_col[8:0])
    );
 
    timing_ctrl timing_ctrl_inst(
@@ -150,7 +167,6 @@ SYNC	video sync output
       .sel_slow_clock(sel_slow_clock),
       // Outputs to 6502
       .halt_b(halt_b), .int_b(int_b), .ready(ready), .core_latch_data(core_latch_data),
-      .VBLANK(VBLANK),
       // Signals to/from dma_ctrl
       .zp_dma_start(zp_dma_start), .dp_dma_start(dp_dma_start),
       .zp_dma_done(zp_dma_done), .dp_dma_done(dp_dma_done),
@@ -179,7 +195,7 @@ SYNC	video sync output
       .drive_AB(drive_AB),
       .ctrl(ctrl),
       .color_map(color_map),
-      .status_read({VBLANK, 7'b0}),
+      .status_read({vblank, 7'b0}),
       .char_base(char_base),
       .ZP(ZP),
       .sel_slow_clock(sel_slow_clock),
@@ -203,27 +219,24 @@ SYNC	video sync output
       .character_width(ctrl[4]), .char_base(char_base)
    );
 
-   // logic [7:0] UV_out;
-   // logic VBLANK;
-   // logic [9:0] vga_row, vga_col;
+   // 
 
    // assign vblank = VBLANK;
 
-   // uv_to_vga video_converter
-   // (
-   //    .clk(vidclk),
-   //    .reset(reset),
-   //    .uv_in(UV_out),
-   //    .row(),
-   //    .col()
-   //    .RED(red),
-   //    .GREEN(green),
-   //    .BLUE(blue),
-   //    .HSync(hsync),
-   //    .VSync(vsync),
-   //    .hblank(hblank),
-   //    .vblank(VBLANK),
-   // )
+	uv_to_vga240 vga_out(
+		.clk    (sysclk),
+		.reset  (reset),
+		.uv_in  (UV_out),
+		.row    (vga_row),
+		.col    (vga_col),
+		.RED    (red),
+		.GREEN  (green),
+		.BLUE   (blue),
+		.HSync  (hsync),
+		.VSync  (vsync),
+		.hblank (hblank),
+		.vblank (vblank)
+	);
 
 endmodule
 

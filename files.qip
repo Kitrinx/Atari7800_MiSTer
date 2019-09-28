@@ -1,0 +1,25 @@
+set_global_assignment -name QIP_FILE t65/t65.qip
+set_global_assignment -name VERILOG_FILE code/ALU.v
+set_global_assignment -name VERILOG_FILE code/cpu.v
+set_global_assignment -name VERILOG_FILE code/tia.v
+set_global_assignment -name SYSTEMVERILOG_FILE code/cart.sv
+set_global_assignment -name VERILOG_FILE code/riot.v
+set_global_assignment -name SYSTEMVERILOG_FILE code/audio.sv
+set_global_assignment -name SYSTEMVERILOG_FILE code/Maria/timing_ctrl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE code/Maria/memory_map.sv
+set_global_assignment -name SYSTEMVERILOG_FILE code/Maria/maria.sv
+set_global_assignment -name SYSTEMVERILOG_FILE code/Maria/line_ram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE code/Maria/dma_ctrl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE code/Maria/video240.sv
+set_global_assignment -name VHDL_FILE dpram.vhd
+set_global_assignment -name SYSTEMVERILOG_FILE code/POKEY.sv
+set_global_assignment -name SYSTEMVERILOG_FILE code/uv_vga.sv
+set_global_assignment -name SYSTEMVERILOG_FILE code/top.sv
+set_global_assignment -name VERILOG_FILE sys/pll_hdmi_cfg/altera_pll_reconfig_top.v -library pll_hdmi_cfg
+set_global_assignment -name VERILOG_FILE sys/pll_hdmi_cfg/altera_pll_reconfig_core.v -library pll_hdmi_cfg
+set_global_assignment -name QIP_FILE sys/pll_hdmi/pll_hdmi_0002.qip -library pll_hdmi
+set_global_assignment -name QIP_FILE sys/pll/pll_0002.qip -library pll
+set_global_assignment -name QIP_FILE sys/sys.qip
+set_global_assignment -name VERILOG_FILE build_id.v
+set_global_assignment -name VHDL_FILE bram.vhd
+set_global_assignment -name SYSTEMVERILOG_FILE Atari7800.sv

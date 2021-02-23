@@ -421,10 +421,10 @@ cpu core
 (
 	.clk   (clk),
 	.reset (reset),
-	.AB    (AB),
+	.AB    (AB2),
 	.DI    (DB_hold),
-	.DO    (DB_OUT),
-	.WE    (WE_OUT),
+	.DO    (DB_OUT2),
+	.WE    (WE_OUT2),
 	.IRQ   (IRQ),
 	.NMI   (NMI),
 	.RDY   (rdy_in),
@@ -441,15 +441,15 @@ T65 cpu (
 
 	.Res_n(~reset),
 	.Clk(sysclk),
-	.Enable(~old_clk & clk),
+	.Enable((~old_clk & clk) & halt_b),
 	.Rdy(rdy_in),
 
 	.IRQ_n(~IRQ),
 	.NMI_n(~NMI),
-	.R_W_n(WE_OUT2),
-	.A(AB2),
-	.DI(~WE_OUT2 ? DB_OUT2 : DB_hold),
-	.DO(DB_OUT2)
+	.R_W_n(WE_OUT),
+	.A(AB),
+	.DI(R_W_n ? DB_hold : DB_OUT),
+	.DO(DB_OUT)
 );
 
 // The purpose of res appears to be to align Maria to the reset vector
@@ -463,7 +463,7 @@ always @(posedge sysclk)
 	old_clk <= clk;
 
 assign RD = ~(WE & ~res & ~reset);
-assign WE = WE_OUT & rdy_in;// & ~latch_data;
+assign WE = ~WE_OUT & rdy_in;// & ~latch_data;
 
 assign DB_hold = (holding) ? DB_hold : DB_IN;
 

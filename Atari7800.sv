@@ -239,9 +239,8 @@ Atari7800 main
 	.sysclk_7_143 (clk_sys),
 	.clock_25     (clk_vid),
 	.reset        (reset),
-	.locked       (clock_locked),
-	.memclk_o     (clk_mem),
-	.pclk_0       (pclk_0),
+	//.pclk_0       (pclk_0),
+	.pclk_2       (pclk_0),
 	.loading      (ioctl_download),
 
 	// Video
@@ -295,7 +294,6 @@ assign AUDIO_L = AUDIO_R;
 wire [16:0] bios_addr;
 reg [7:0] cart_data, bios_data;
 wire cart_sel, bios_sel;
-wire clk_mem;
 wire pclk_0;
 reg [7:0] joy0_type, joy1_type, cart_region, cart_save;
 
@@ -341,7 +339,7 @@ assign cart_write_addr = (ioctl_addr >= 8'd128) && cart_is_7800 ? (ioctl_addr[17
 dpram_dc #(.widthad_a(18)) cart
 (
 	.address_a(cart_addr),
-	.clock_a(pclk_0),
+	.clock_a(clk_sys),
 	.byteena_a(~cart_download),
 	.q_a(cart_data),
 
@@ -355,7 +353,7 @@ dpram_dc #(.widthad_a(18)) cart
 dpram_dc #(.widthad_a(12)) bios
 (
 	.address_a(bios_addr[11:0]),
-	.clock_a(clk_mem),
+	.clock_a(clk_sys),
 	.byteena_a(bios_sel & ~bios_download),
 	.q_a(bios_data),
 

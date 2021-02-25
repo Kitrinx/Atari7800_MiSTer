@@ -1,7 +1,6 @@
-`timescale 1ns / 1ps
-
 // Number of sysclk cycles needed for the halt signal to take on the CPU
-`define DMA_STARTUP_CYCLES 12
+//`define DMA_STARTUP_CYCLES 12
+`define DMA_STARTUP_CYCLES 16
 
 // Number of sysclk cycles that the cpu gets at the start of a line
 `define START_OF_LINE_CYCLES 28

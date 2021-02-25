@@ -5,13 +5,14 @@
 // Covers the bank switching, ram, and audio hardware from carts
 module cart
 (
-	input  logic        clock, clock100, pclk_2,
+	input  logic        maria_clock, clock, clock100, pclk_2,
 	input  logic [15:0] address_in,
 	input  logic [7:0]  din,
 	input  logic [7:0]  rom_din,
 	input  logic [9:0]  cart_flags,
 	input  logic [31:0] cart_size,
 	input  logic        cart_cs,
+	input  logic        dma_read,
 	input  logic        rw, // Write low
 	input  logic        reset,
 
@@ -28,7 +29,7 @@ logic [2:0] hardware_map[8];
 logic [3:0] bank_map[8];
 logic [2:0] bank_type; // 00 = Supergame, 01 = Activision, 02 = none
 logic [31:0] address_offset;
-logic [2:0] cart_cs_reg;
+logic [2:0] cart_cs_reg, cart_cs_reg_m;
 logic [3:0] bank_mask;
 
 always_ff @(negedge clock) begin
@@ -153,7 +154,7 @@ end
 
 spram #(.addr_width(14)) cart_ram
 (
-	.clock(clock),
+	.clock(maria_clock),
 	.address(address_in[13:0]),
 	.data(din),
 	.wren(~rw),
@@ -161,7 +162,9 @@ spram #(.addr_width(14)) cart_ram
 	.cs(ram_cs)
 );
 
-always_ff @(posedge clock) if (cart_cs) cart_cs_reg <= hardware_map[address_index];
+always_ff @(posedge clock) if (cart_cs && ~dma_read) cart_cs_reg <= hardware_map[address_index];
+
+always_ff @(posedge maria_clock) if (cart_cs) cart_cs_reg_m <= hardware_map[address_index];
 
 //CS Type:
 //00 - high impedance
@@ -170,7 +173,7 @@ always_ff @(posedge clock) if (cart_cs) cart_cs_reg <= hardware_map[address_inde
 //03 - RAM
 //04 - Banked ROM
 always_comb begin
-	case(cart_cs_reg)
+	case(hardware_map[address_index])
 		3'd0: dout = 8'bZZZZZZZZ;   // High Impedance
 		3'd1: dout = rom_din;       // ROM Data
 		3'd2: dout = pokey4k_dout;  // POKEY

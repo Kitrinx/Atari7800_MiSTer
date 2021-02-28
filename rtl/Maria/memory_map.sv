@@ -63,7 +63,7 @@ module memory_map (
 				16'b0000_000x_1xxx_xxxx,
 
 				// 2000-27FF: 2K RAM. Zero Page and Stack mirrored from here.
-				16'b001x_xxxx_xxxx_xxxx: cs = `CS_RAM0;
+				16'b0010_0xxx_xxxx_xxxx: cs = `CS_RAM0;
 
 				// TIA Registers:
 				// 0000-001F, 0100-001F, 0200-021F, 0300-031F
@@ -117,7 +117,7 @@ module memory_map (
 
 	end // always_comb
 
-	always_ff @(posedge pclk_0, negedge reset_b) begin
+	always_ff @(posedge pclk_2, negedge reset_b) begin
 		if (~reset_b) begin
 			ctrl <= {1'b0, 2'b10, 1'b0, 1'b0, 1'b0, 2'b00}; // 8'b0
 			ctrl_kept <= 8'b0;
@@ -149,7 +149,7 @@ module memory_map (
 			deassert_ready <= 1'b0;
 			//Handle writes to mem mapped regs
 			case(write_addr_found)
-			  8'h20: color_map[0] <= DB_in;
+			  8'h20: color_map[0] <= DB_in; // Background color
 			  8'h21: color_map[1] <= DB_in;
 			  8'h22: color_map[2] <= DB_in;
 			  8'h23: color_map[3] <= DB_in;
@@ -205,23 +205,23 @@ module memory_map (
 				8'h29: DB_out <= color_map[7];
 				8'h2a: DB_out <= color_map[8];
 				8'h2b: DB_out <= color_map[9];
-				8'h2c: DB_out <= ZPH;
+				//8'h2c: DB_out <= ZPH; // Write Only
 				8'h2d: DB_out <= color_map[10];
 				8'h2e: DB_out <= color_map[11];
 				8'h2f: DB_out <= color_map[12];
-				8'h30: DB_out <= ZPL;
+				//8'h30: DB_out <= ZPL; // Write Only
 				8'h31: DB_out <= color_map[13];
 				8'h32: DB_out <= color_map[14];
 				8'h33: DB_out <= color_map[15];
-				8'h34: DB_out <= char_base;
+				//8'h34: DB_out <= char_base; // Write Only
 				8'h35: DB_out <= color_map[16];
 				8'h36: DB_out <= color_map[17];
 				8'h37: DB_out <= color_map[18];
-				//8'h38: NOT USED
+				8'h38: DB_out <= 8'd0;
 				8'h39: DB_out <= color_map[19];
 				8'h3a: DB_out <= color_map[20];
 				8'h3b: DB_out <= color_map[21];
-				8'h3c: DB_out <= ctrl;
+				//8'h3c: DB_out <= ctrl; // Write only
 				8'h3d: DB_out <= color_map[22];
 				8'h3e: DB_out <= color_map[23];
 				8'h3f: DB_out <= color_map[24];

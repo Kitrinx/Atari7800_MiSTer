@@ -45,9 +45,9 @@ logic visible;
 localparam MAX_ROW      = 10'd262;
 localparam MAX_COLUMN   = 10'd453;
 
-localparam VBLANK_START = 10'd241;
-localparam VSYNC_START  = VBLANK_START + 10'd20;
-localparam VSYNC_END    = VSYNC_START + 10'd4;
+localparam VBLANK_START = 10'd243;
+localparam VSYNC_START  = VBLANK_START + 10'd4;
+localparam VSYNC_END    = VSYNC_START + 10'd3;
 
 localparam HBLANK_START = 10'd320;
 localparam HSYNC_START  = HBLANK_START + 10'd35;
@@ -65,10 +65,12 @@ end else begin
 	if (col >= MAX_COLUMN) begin
 		col <= 0;
 		row <= row + 10'd1;
+
+		if (row >= MAX_ROW)
+			row <= 0;
 	end
 
-	if (row >= MAX_ROW)
-		row <= 0;
+
 end
 
 assign VSync      = ((row >= VSYNC_START) && (row < VSYNC_END));

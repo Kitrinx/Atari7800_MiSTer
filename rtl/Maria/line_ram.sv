@@ -23,7 +23,8 @@ module line_ram(
 	input  logic               COLOR_KILL,
 	input  logic               LRAM_SWAP,
 	// VGA Control signal
-	input  logic [8:0]         LRAM_OUT_COL
+	input  logic [8:0]         LRAM_OUT_COL,
+	input  logic               DMA_EN
 );
 
 logic [159:0][4:0]          lram_in, lram_out;
@@ -45,7 +46,7 @@ logic [7:0]               lram_ix;
 assign playback_ix = (LRAM_OUT_COL < 9'd320) ? LRAM_OUT_COL : 9'd0;
 
 always_comb begin
-	if (playback_color == 2'b0) begin
+	if (playback_color == 2'b0 || ~DMA_EN) begin
 		PLAYBACK = COLOR_MAP[0];
 	end else begin
 		PLAYBACK = COLOR_MAP[3 * playback_palette + playback_color];

@@ -212,6 +212,10 @@ pll pll
 	.locked(clock_locked)
 );
 
+// 7.1590909 half
+// 14.3181818 = NTSC
+// 14.187576 = PAL
+
 wire reset = RESET | buttons[1] | status[0] | ioctl_download | initial_pause;
 
 wire cart_download = ioctl_download & (ioctl_index != 8'd0);

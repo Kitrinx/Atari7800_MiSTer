@@ -31,6 +31,7 @@ logic [2:0] bank_type; // 00 = Supergame, 01 = Activision, 02 = none
 logic [31:0] address_offset;
 logic [2:0] cart_cs_reg, cart_cs_reg_m;
 logic [3:0] bank_mask;
+logic mask_upper_bank;
 
 always_ff @(negedge clock) begin
 	hardware_map <= '{3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0};
@@ -38,6 +39,7 @@ always_ff @(negedge clock) begin
 	bank_type <= 3'b000;
 	address_offset <= 32'd0;
 	bank_mask <= 4'b1111;
+	mask_upper_bank <= 0;
 
 	// Banking mode selector
 	if (cart_flags[8]) begin                                   // Activision
@@ -61,6 +63,7 @@ always_ff @(negedge clock) begin
 	end else if (cart_flags[1] || cart_size >= 32'h10000) begin // SuperGame
 		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
 		bank_map <= '{4'd0, 4'd0, 4'd6, 4'd6, 4'd0, 4'd0, 4'd7, 4'd7};
+		mask_upper_bank <= cart_size == 32'hC000;
 		bank_map[4] <= bank_reg[3:0];
 		bank_map[5] <= bank_reg[3:0];
 		bank_mask <= (cart_size == 32'h10000) ? 4'b0011 : 4'b0111; // 64k carts have 4 banks mirrored
@@ -73,7 +76,7 @@ always_ff @(negedge clock) begin
 		else if (cart_size <= 32'h8000) // A7832
 			hardware_map <= '{3'd0, 3'd0, 3'd0, 3'd0, 3'd1, 3'd1, 3'd1, 3'd1};
 		else if (cart_size <= 32'hC000) // A7848
-			hardware_map <= '{3'd0, 3'd0, 3'd0, 3'd1, 3'd1, 3'd1, 3'd1, 3'd1};
+			hardware_map <= '{3'd0, 3'd0, 3'd1, 3'd1, 3'd1, 3'd1, 3'd1, 3'd1};
 		address_offset <= (cart_size - 1'd1) <= 32'hFFFF ? 32'hFFFF - (cart_size - 1'd1) : 32'd0;
 		bank_type <= 3'd2;
 	end

@@ -1,8 +1,9 @@
 // Number of sysclk cycles needed for the halt signal to take on the CPU
+// 16 for "other lines" and 24 for "last" lines?
 //`define DMA_STARTUP_CYCLES 12
 `define DMA_STARTUP_CYCLES 16
 
-// Number of sysclk cycles that the cpu gets at the start of a line
+// Number of sysclk cycles that the cpu gets at the start of a line 7 cpu * 4 maria
 `define START_OF_LINE_CYCLES 28
 
 // At which column we terminate DP DMA
@@ -13,16 +14,16 @@
 // 9 for startup, 7 for access, 13 for shutdown
 
 // actual startup: 12 actual shutdown: 23
-`define ZP_READY_COL 453 - (`DMA_STARTUP_CYCLES + 23 + 10)
+`define ZP_READY_COL 453 - (`DMA_STARTUP_CYCLES + 23)
 
 // VGA Row to start the ZP DMA. Rows 0-1 are the first visible line,
 // rows 523-524 are the virst invisible line, rows 521-522 are buffering
 // for the first invisible line, so ZP needs to be fetched by row 521.
-`define ZP_READY_ROW 258
+`define ZP_READY_ROW 261
 
-`define VGA_VISIBLE_COLS 320
+`define VGA_VISIBLE_COLS 319
 
-`define NTSC_SCANLINE_COUNT 242
+`define NTSC_SCANLINE_COUNT 243
 
 `define COOLDOWN_CYCLES 1
 
@@ -226,21 +227,19 @@ module timing_ctrl (
 				end
 			end
 			HWAIT: begin
-				if (~enable) begin
-					state <= VWAIT_COOLDOWN;
-					halt_b <= 1'b0;
-					raise_dli <= 1'b0;
-					dli_next <= 1'b0;
-					cooldown_count <= `COOLDOWN_CYCLES;
-				end else if (vga_line_delta) begin
+				
+			if (vga_line_delta && enable) begin
 					state <= START_OF_LINE;
 					startup_ctr <= 1;
 				end
+			else if (last_line) begin
+				state <= VWAIT_COOLDOWN;
+			end
 			end
 			ZP_DMA_STARTUP: begin
 				startup_ctr <= startup_ctr + 1'd1;
 				if (~enable) begin
-					state <= VWAIT_COOLDOWN;
+					state <= last_line ? VWAIT_COOLDOWN : HWAIT_COOLDOWN;
 					raise_dli <= 1'b0;
 					halt_b <= 1'b0;
 					cooldown_count <= `COOLDOWN_CYCLES;
@@ -252,7 +251,7 @@ module timing_ctrl (
 			ZP_DMA: begin
 				zp_dma_start <= 1'b0;
 				if (~enable) begin
-					state <= VWAIT_COOLDOWN;
+					state <= last_line ? VWAIT_COOLDOWN : HWAIT_COOLDOWN;
 					raise_dli <= 1'b0;
 					halt_b <= 1'b0;
 					cooldown_count <= `COOLDOWN_CYCLES;
@@ -280,7 +279,7 @@ module timing_ctrl (
 			DP_DMA_STARTUP: begin
 				startup_ctr <= startup_ctr + 1'd1;
 				if (~enable) begin
-					state <= VWAIT_COOLDOWN;
+					state <= last_line ? VWAIT_COOLDOWN : HWAIT_COOLDOWN;
 					raise_dli <= 1'b0;
 					halt_b <= 1'b0;
 					cooldown_count <= `COOLDOWN_CYCLES;
@@ -293,7 +292,7 @@ module timing_ctrl (
 			DP_DMA: begin
 				dp_dma_start <= 1'b0;
 				if (~enable) begin
-					state <= VWAIT_COOLDOWN;
+					state <= last_line ? VWAIT_COOLDOWN : HWAIT_COOLDOWN;
 					halt_b <= 1'b0;
 					cooldown_count <= `COOLDOWN_CYCLES;
 				end else if (dp_dma_done | dp_dma_kill) begin

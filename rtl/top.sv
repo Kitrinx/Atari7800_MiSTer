@@ -1,6 +1,6 @@
-`timescale 1ns / 1ps
 `include "atari7800.vh"
 
+`define OLD_TIA
 
 module Atari7800(
 input  logic       clock_25, sysclk_7_143, reset,
@@ -93,15 +93,22 @@ output logic [7:0] PAout, PBout
 
 	`chipselect       CS_maria_buf, CS_core_buf, CS_buf, CS;
 
-	always_ff @(posedge sysclk_7_143, posedge reset)
+	logic dma_latch;
+
+	always_ff @(posedge sysclk_7_143) begin
 		if (reset)
-		CS_buf <= `CS_NONE;
+			CS_buf <= `CS_NONE;
 		else
-		CS_buf <= CS;
+			CS_buf <= CS;
+
+		dma_latch <= maria_drive_AB;
+	end
+
+	wire dma_en = maria_drive_AB;
 
 
 	//CS LOGIC
-	logic ram0_cs, ram1_cs, bios_cs, tia_cs, riot_cs, cart_cs, riot_ram_cs, maria_cs;
+	logic ram0_cs, ram1_cs, bios_cs, tia_cs, riot_cs, cart_cs, riot_ram_cs;
 
 	always_comb begin
 		ram0_cs = 1'b0;
@@ -118,7 +125,6 @@ output logic [7:0] PAout, PBout
 			`CS_TIA: tia_cs = 1'b1;
 			`CS_RIOT_IO: riot_cs = 1'b1;
 			`CS_CART: cart_cs = 1'b1;
-			`CS_MARIA: maria_cs = 1'b1;
 			`CS_RIOT_RAM: begin riot_cs = 1'b1; riot_ram_cs = 1'b1; end
 			default: cart_cs = 0;
 		endcase
@@ -126,7 +132,7 @@ output logic [7:0] PAout, PBout
 
 	always_comb begin
 		// FIXME: this is super janky, find out why DMA needs a delayed cs
-		casex (maria_drive_AB ? CS_buf : CS)
+		casex (dma_en || dma_latch ? CS_buf : CS)
 			`CS_RAM0: read_DB = ram0_DB_out;
 			`CS_RAM1: read_DB = ram1_DB_out;
 			`CS_RIOT_IO,
@@ -141,8 +147,8 @@ output logic [7:0] PAout, PBout
 
 		write_DB = core_DB_out;
 
-		AB = maria_drive_AB ? maria_AB_out : core_AB_out;
-		RW = maria_drive_AB ? 1'b1 : cpu_rwn;
+		AB = dma_en ? maria_AB_out : core_AB_out;
+		RW = dma_en ? 1'b1 : cpu_rwn;
 	end
 
 	// Memory
@@ -155,7 +161,7 @@ output logic [7:0] PAout, PBout
 		.clock_a(sysclk_7_143),
 		.address_a(AB[10:0]),
 		.data_a(write_DB),
-		.wren_a(~RW & ram0_cs & pclk_2),
+		.wren_a(~RW & ram0_cs & pclk_2 & ~dma_latch),
 		.q_a(ram0_DB_out),
 		.byteena_a(~loading),
 
@@ -169,7 +175,7 @@ output logic [7:0] PAout, PBout
 		.clock_a(sysclk_7_143),
 		.address_a(AB[10:0]),
 		.data_a(write_DB),
-		.wren_a(~RW & ram1_cs & pclk_2),
+		.wren_a(~RW & ram1_cs & pclk_2 & ~dma_latch),
 		.q_a(ram1_DB_out),
 		.byteena_a(~loading),
 
@@ -179,7 +185,7 @@ output logic [7:0] PAout, PBout
 	);
 
 	// Clock
-	assign pclk_2 = ~pclk_0;
+	//assign pclk_2 = ~pclk_0;
 
 	// MARIA
 	maria maria_inst(
@@ -215,6 +221,7 @@ output logic [7:0] PAout, PBout
 	);
 
 	// TIA
+	`ifdef OLD_TIA
 	TIA tia_inst(
 		.A({(AB[5] & tia_en), AB[4:0]}), // Address bus input
 		.Din(write_DB),                  // Data bus input
@@ -237,7 +244,51 @@ output logic [7:0] PAout, PBout
 		.AUD1(aud1),                     //audio pin 1
 		.audv0(audv0),                   //audio volume for use with external xformer module
 		.audv1(audv1)                    //audio volume for use with external xformer module
+	 );
+
+`else
+	wire [7:0] i0 = idump[0] ? 8'd0 : 8'd192;
+	wire [7:0] i1 = idump[1] ? 8'd0 : 8'd192;
+	wire [7:0] i2 = idump[2] ? 8'd0 : 8'd192;
+	wire [7:0] i3 = idump[3] ? 8'd0 : 8'd192;
+
+
+
+	TIA2 tia_inst
+	(
+		.clk(tia_clk),
+		.phi0(),
+		.phi2(pclk_2),
+		.RW_n(RW),
+		.rdy(tia_RDY),
+		.addr({(AB[5] & tia_en), AB[4:0]}),
+		.d_in(write_DB),
+		.d_out(tia_DB_out),
+		.i({i3, i2, i1, i0}),     // On real hardware, these would be ADC pins. i0..3
+		.i4(ilatch[0]),
+		.i5(ilatch[1]),
+		.aud0(audv0),
+		.aud1(audv1),
+		.col(),
+		.lum(),
+		.BLK_n(),
+		.sync(),
+		.cs0_n(~tia_cs),
+		.cs2_n(~tia_cs),
+		.rst(reset),
+		.ce(1),     // Clock enable for CLK generation only
+		.video_ce(),
+		.vblank(),
+		.hblank(),
+		.vsync(),
+		.hsync(),
+		.phi2_gen()
 	);
+
+	assign aud1 = 1;
+	assign aud0 = 1;
+
+`endif
 
 	audio_xformer audio_xformer
 	(
@@ -250,22 +301,41 @@ output logic [7:0] PAout, PBout
 	);
 
 //RIOT
-RIOT riot_inst
+// RIOT riot_inst
+// (
+// 	.A(AB[6:0]),         // Address bus input
+// 	.Din(write_DB),      // Data bus input
+// 	.Dout(riot_DB_out),  // Data bus output
+// 	.CS(riot_cs),        // Chip select input
+// 	.CS_n(~riot_cs),     // Active low chip select input
+// 	.R_W_n(RW),          // Active high read, active low write input
+// 	.RS_n(~riot_ram_cs), // Active low rom select input
+// 	.RES_n(~reset),      // Active low reset input
+// 	.IRQ_n(),            // Active low interrupt output
+// 	.CLK(pclk_2),        // Clock input
+// 	.PAin(PAin),         // 8 bit port A input
+// 	.PAout(PAout),       // 8 bit port A output
+// 	.PBin(PBin),         // 8 bit port B input
+// 	.PBout(PBout)        // 8 bit port B output
+// );
+
+M6532 #(.init_7800(1)) riot_inst_2
 (
-	.A(AB[6:0]),         // Address bus input
-	.Din(write_DB),      // Data bus input
-	.Dout(riot_DB_out),  // Data bus output
-	.CS(riot_cs),        // Chip select input
-	.CS_n(~riot_cs),     // Active low chip select input
-	.R_W_n(RW),          // Active high read, active low write input
-	.RS_n(~riot_ram_cs), // Active low rom select input
-	.RES_n(~reset),      // Active low reset input
-	.IRQ_n(),            // Active low interrupt output
-	.CLK(pclk_2),        // Clock input
-	.PAin(PAin),         // 8 bit port A input
-	.PAout(PAout),       // 8 bit port A output
-	.PBin(PBin),         // 8 bit port B input
-	.PBout(PBout)        // 8 bit port B output
+	.clk(pclk_2), // PHI 2
+	.ce(1),  // Clock enable
+	.res_n(~reset), // reset
+	.addr(AB[6:0]), // Address
+	.RW_n(RW), // 1 = read, 0 = write
+	.d_in(write_DB),
+	.d_out(riot_DB_out),
+	.RS_n(~riot_ram_cs), // RAM select
+	.IRQ_n(),
+	.CS1(riot_cs), // Chip select 1, 1 = selected
+	.CS2_n(~riot_cs),// Chip select 2, 0 = selected
+	.PA_in(PAin),
+	.PA_out(PAout),
+	.PB_in(PBin),
+	.PB_out(PBout)
 );
 
 //6502
@@ -278,7 +348,8 @@ logic cpu_rwn;
 
 M6502C cpu_inst
 (
-	.clk(pclk_0),
+	.pclk_0(pclk_0),
+	.pclk_2(pclk_2),
 	.sysclk(sysclk_7_143),
 	.reset(reset),
 	.AB(core_AB_out),
@@ -316,7 +387,7 @@ cart cart
 	.maria_clock(sysclk_7_143),
 	.clock(pclk_2),
 	.clock100(),
-	.dma_read(maria_drive_AB),
+	.dma_read(dma_en),
 	.pclk_2(pclk_0),
 	.reset(reset),
 	.address_in(AB[15:0]),
@@ -390,7 +461,8 @@ endmodule
 
 module M6502C
 (
-	input clk,              // CPU clock
+	input pclk_0,           // CPU clock (Phi0)
+	output pclk_2,           // Phi2
 	input sysclk,           // MARIA Clock
 	input reset,            // reset signal
 	output [15:0] AB,       // address bus
@@ -415,7 +487,7 @@ logic old_clk;
 
 cpu core
 (
-	.clk   (clk),
+	.clk   (pclk_0),
 	.reset (reset),
 	.AB    (AB),
 	.DI    (DB_hold),
@@ -444,15 +516,21 @@ always_ff @(negedge clk, posedge reset)
 
 `else
 
+wire cpu_ce = ~old_clk & pclk_0;
+wire p2_ce = old_clk & ~pclk_0;
+logic cpu_halt;
+logic p2_halt;
+
+assign pclk_2 = ~pclk_0 & ~p2_halt;
 
 T65 cpu (
 	.mode (0),
 	.BCD_en(1),
 
 	.Res_n(~reset),
-	.Clk(sysclk),
-	.Enable((~old_clk & clk)),
-	.Rdy(RDY & halt_b),
+	.Clk(pclk_0 && ~cpu_halt),
+	.Enable(1),
+	.Rdy(RDY),
 
 	.IRQ_n(~IRQ),
 	.NMI_n(~NMI),
@@ -462,11 +540,33 @@ T65 cpu (
 	.DO(DB_OUT)
 );
 
+logic [7:0] db_latch;
+
 always @(posedge sysclk) begin
-	old_clk <= clk;
+	old_clk <= pclk_0;
+	if (p2_ce && ~halt_b)
+		cpu_halt <= 1;
+
+	if (p2_ce && halt_b)
+		cpu_halt <= 0;
+	
+	if (cpu_ce && cpu_halt)
+		p2_halt <= 1;
+
+	if (cpu_ce && ~cpu_halt)
+		p2_halt <= 0;
+
+	if (~cpu_halt)
+		db_latch <= DB_IN;
+
+	if (reset) begin
+		cpu_halt <= 0;
+		p2_halt <= 0;
+		old_clk <= 0;
+	end
 end
 
-assign RD = WE_OUT;
+assign RD = WE_OUT | cpu_halt;
 
 `endif
 

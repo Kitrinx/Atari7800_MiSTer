@@ -206,7 +206,7 @@ module uv_to_vga (
 	else
 		row <= row + row_enable;
 
-	assign row_clear  = (row == 10'd524) & row_enable;
+	assign row_clear  = (row == 10'd526) & row_enable;
 	assign row_enable = (col == 10'd799);
 	assign VSync      = (row < 10'd490) | (row > 10'd491);
 

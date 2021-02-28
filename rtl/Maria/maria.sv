@@ -119,7 +119,7 @@ SYNC	video sync output
 	//// Control signals between timing_ctrl and line_ram
 	logic             lram_swap;
 
-
+	logic        palette_w_d, input_w_d, pixels_w_d, wm_w_d;
 	logic reset;
 	logic [3:0] reset_delay;
 
@@ -136,6 +136,14 @@ SYNC	video sync output
 	//       reset <= 0;
 	// end
 
+	always @(posedge sysclk) begin
+		palette_w_d <= palette_w;
+		input_w_d <= input_w;
+		pixels_w_d <= pixels_w;
+		wm_w_d <= wm_w;
+	end
+
+	wire dma_en = ctrl[6:5] == 2'b10;
 
 	line_ram line_ram_inst(
 		.SYSCLK(sysclk), .RESET(reset),
@@ -151,6 +159,7 @@ SYNC	video sync output
 		.READ_MODE(ctrl[1:0]),
 		.KANGAROO_MODE(ctrl[2]),
 		.BORDER_CONTROL(ctrl[3]),
+		.DMA_EN(dma_en),
 		.COLOR_KILL(ctrl[7]),
 		// Control signals from timing_ctrl
 		.LRAM_SWAP(lram_swap),
@@ -159,7 +168,7 @@ SYNC	video sync output
 
 	timing_ctrl timing_ctrl_inst(
 		// Enabled only if men is asserted and display mode is 10
-		.enable(enable & ctrl[6] & ~ctrl[5]),
+		.enable(enable & dma_en),
 		// Clocking
 		.sysclk(sysclk), .reset(reset), .pclk_2(pclk_2),
 		.pclk_0(pclk_0), .tia_clk(tia_clk),
@@ -202,7 +211,7 @@ SYNC	video sync output
 		.deassert_ready(deassert_ready),
 		.zp_written(zp_written),
 		.sysclock(sysclk), .reset_b(~reset),
-		.pclk_0(pclk_2), .pclk_2(pclk_0)
+		.pclk_2(pclk_2), .pclk_0(pclk_0)
 	);
 
 	dma_ctrl dma_ctrl_inst (

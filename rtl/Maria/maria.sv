@@ -3,7 +3,6 @@
 
 
 module maria(
-	// Busses ("tristate")
 	input  logic [15:0] AB_in,
 	output logic [15:0] AB_out,
 	output logic        drive_AB,
@@ -11,10 +10,6 @@ module maria(
 	input  logic  [7:0] read_DB_in,
 	input  logic  [7:0] write_DB_in,
 	output logic  [7:0] DB_out,
-	// inout wire [15:0]  AB,
-	// inout wire [ 7:0]  DB,
-	//inout wire [7:0]   DB,
-	//inout wire [15:0]  AB,
 
 	// Clocking
 	input logic        reset_s,
@@ -37,7 +32,7 @@ module maria(
 	output logic hsync, vsync, hblank, vblank,
 
 	// Outputs to 6502
-	output logic       int_b, halt_b, ready, core_latch_data
+	output logic       int_b, halt_b, ready
 );
 
 /*
@@ -118,8 +113,7 @@ SYNC	video sync output
 
 	//// Control signals between timing_ctrl and line_ram
 	logic             lram_swap;
-
-
+	
 	logic reset;
 	logic [3:0] reset_delay;
 
@@ -136,21 +130,28 @@ SYNC	video sync output
 	//       reset <= 0;
 	// end
 
+	wire dma_en = ctrl[6:5] == 2'b10;
 
 	line_ram line_ram_inst(
-		.SYSCLK(sysclk), .RESET(reset),
+		.SYSCLK(sysclk),
+		.RESET(reset),
 		.PLAYBACK(UV_out),
 		// Databus inputs
-		.INPUT_ADDR(read_DB_in), .PALETTE(read_DB_in[7:5]), .PIXELS(read_DB_in),
+		.INPUT_ADDR(read_DB_in),
+		.PALETTE(read_DB_in[7:5]),
+		.PIXELS(read_DB_in),
 		.WM(read_DB_in[7]),
 		// Write enable for databus inputs
-		.PALETTE_W(palette_w), .INPUT_W(input_w), .PIXELS_W(pixels_w),
+		.PALETTE_W(palette_w),
+		.INPUT_W(input_w),
+		.PIXELS_W(pixels_w),
 		.WM_W(wm_w),
 		// Memory mapped registers
 		.COLOR_MAP(color_map),
 		.READ_MODE(ctrl[1:0]),
 		.KANGAROO_MODE(ctrl[2]),
 		.BORDER_CONTROL(ctrl[3]),
+		.DMA_EN(dma_en),
 		.COLOR_KILL(ctrl[7]),
 		// Control signals from timing_ctrl
 		.LRAM_SWAP(lram_swap),
@@ -159,39 +160,54 @@ SYNC	video sync output
 
 	timing_ctrl timing_ctrl_inst(
 		// Enabled only if men is asserted and display mode is 10
-		.enable(enable & ctrl[6] & ~ctrl[5]),
+		.enable(enable & dma_en),
 		// Clocking
-		.sysclk(sysclk), .reset(reset), .pclk_2(pclk_2),
-		.pclk_0(pclk_0), .tia_clk(tia_clk),
+		.sysclk(sysclk),
+		.reset(reset),
+		.pclk_2(pclk_2),
+		.pclk_0(pclk_0),
+		.tia_clk(tia_clk),
 		// Signals needed to slow pclk_0
 		.sel_slow_clock(sel_slow_clock),
 		// Outputs to 6502
-		.halt_b(halt_b), .int_b(int_b), .ready(ready), .core_latch_data(core_latch_data),
+		.halt_b(halt_b),
+		.int_b(int_b),
+		.ready(ready),
 		// Signals to/from dma_ctrl
-		.zp_dma_start(zp_dma_start), .dp_dma_start(dp_dma_start),
-		.zp_dma_done(zp_dma_done), .dp_dma_done(dp_dma_done),
+		.zp_dma_start(zp_dma_start),
+		.dp_dma_start(dp_dma_start),
+		.zp_dma_done(zp_dma_done),
+		.dp_dma_done(dp_dma_done),
 		.dp_dma_done_dli(dp_dma_done_dli),
-		.dp_dma_kill(dp_dma_kill), .last_line(last_line),
+		.dp_dma_kill(dp_dma_kill),
+		.last_line(last_line),
 		// Signals to/from line_ram
 		.lram_swap(lram_swap),
 		// Signals to/from VGA
-		.vga_row(vga_row), .vga_col(vga_col),
+		.vga_row(vga_row),
+		.vga_col(vga_col),
 		// Signals from memory map
 		.deassert_ready(deassert_ready),
-		.zp_written(zp_written)
+		.zp_written(zp_written),
+		.hblank(hblank)
 	);
 
 	memory_map memory_map_inst(
 		.maria_en(enable),
 		.tia_en(tia_en),
 		.AB(AB_in),
-		.DB_in(write_DB_in), .DB_out(DB_out),
+		.DB_in(write_DB_in),
+		.DB_out(DB_out),
 		//.drive_DB(drive_DB),
-		.halt_b(halt_b), .we_b(RW),
-		//.tia_b(tia_b), .p6532_b(p6532_b),
-		//.ram0_b(ram0_b), .ram1_b(ram1_b),
+		.halt_b(halt_b),
+		.we_b(RW),
+		//.tia_b(tia_b),
+		//.p6532_b(p6532_b),
+		//.ram0_b(ram0_b),
+		//.ram1_b(ram1_b),
 		//.riot_ram_b(riot_ram_b),
-		.cs(CS), .bios_en(bios_en),
+		.cs(CS),
+		.bios_en(bios_en),
 		.drive_AB(drive_AB),
 		.ctrl(ctrl),
 		.color_map(color_map),
@@ -201,27 +217,33 @@ SYNC	video sync output
 		.sel_slow_clock(sel_slow_clock),
 		.deassert_ready(deassert_ready),
 		.zp_written(zp_written),
-		.sysclock(sysclk), .reset_b(~reset),
-		.pclk_0(pclk_2), .pclk_2(pclk_0)
+		.sysclock(sysclk),
+		.reset_b(~reset),
+		.pclk_2(pclk_2),
+		.pclk_0(pclk_0)
 	);
 
 	dma_ctrl dma_ctrl_inst (
-		.AddrB(AB_out), .drive_AB(drive_AB),
-		.DataB(read_DB_in), .ZP(ZP),
-		.palette_w(palette_w), .input_w(input_w), .pixels_w(pixels_w),
+		.AddrB(AB_out),
+		.drive_AB(drive_AB),
+		.DataB(read_DB_in),
+		.ZP(ZP),
+		.palette_w(palette_w),
+		.input_w(input_w),
+		.pixels_w(pixels_w),
 		.wm_w(wm_w),
-		.zp_dma_start(zp_dma_start), .dp_dma_start(dp_dma_start),
+		.zp_dma_start(zp_dma_start),
+		.dp_dma_start(dp_dma_start),
 		.dp_dma_kill(dp_dma_kill),
-		.zp_dma_done(zp_dma_done), .dp_dma_done(dp_dma_done),
+		.zp_dma_done(zp_dma_done),
+		.dp_dma_done(dp_dma_done),
 		.dp_dma_done_dli(dp_dma_done_dli),
-		.sysclk(sysclk), .reset(reset),
+		.sysclk(sysclk),
+		.reset(reset),
 		.last_line(last_line),
-		.character_width(ctrl[4]), .char_base(char_base)
+		.character_width(ctrl[4]),
+		.char_base(char_base)
 	);
-
-	//
-
-	// assign vblank = VBLANK;
 
 	uv_to_vga240 vga_out(
 		.clk    (sysclk),

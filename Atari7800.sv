@@ -1,8 +1,6 @@
 //============================================================================
 //  Atari 7800 for MiSTer
-//  Copyright (C) 2017,2018 Srg320
-//  Copyright (C) 2018 Sorgelig
-//
+//  Copyright (C) 2021 Kitrinx
 //  This program is free software; you can redistribute it and/or modify it
 //  under the terms of the GNU General Public License as published by the Free
 //  Software Foundation; either version 2 of the License, or (at your option)
@@ -185,8 +183,8 @@ assign LED_USER  = ld[7];
 assign LED_DISK  = ld[6];
 assign LED_POWER = 0;
 
-assign VIDEO_ARX = status[8] ? 8'd16 : 8'd4;
-assign VIDEO_ARY = status[8] ? 8'd9  : 8'd3;
+assign VIDEO_ARX = status[8] ? 8'd16 : 12'd2969;
+assign VIDEO_ARY = status[8] ? 8'd9  : 12'd2628;
 
 assign VGA_SCALER = 0;
 
@@ -212,6 +210,10 @@ pll pll
 	.locked(clock_locked)
 );
 
+// 7.1590909 half
+// 14.3181818 = NTSC
+// 14.187576 = PAL
+
 wire reset = RESET | buttons[1] | status[0] | ioctl_download | initial_pause;
 
 wire cart_download = ioctl_download & (ioctl_index != 8'd0);
@@ -231,7 +233,7 @@ end
 `include "build_id.v"
 parameter CONF_STR = {
 	"ATARI7800;;",
-	"F,A78A26;",
+	"F1,A78A26;",
 	"O8,Aspect ratio,4:3,16:9;",
 	"O9B,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"-;",
@@ -356,6 +358,7 @@ logic [31:0] hcart_size, cart_size;
 logic [17:0] cart_addr;
 
 wire cart_is_7800 = (cart_header == "ATARI");
+//wire cart_is_7800 = ~|ioctl_index[7:6];
 
 always_ff @(posedge clk_sys) begin
 	logic old_cart_download;
@@ -372,16 +375,16 @@ always_ff @(posedge clk_sys) begin
 			'd03: cart_header[23:16] <= ioctl_dout;
 			'd04: cart_header[15:8] <= ioctl_dout;
 			'd05: cart_header[7:0] <= ioctl_dout;
-			'd49: hcart_size[31:24] <= ioctl_dout; //This appears to be useless.
-			'd50: hcart_size[23:16] <= ioctl_dout;
-			'd51: hcart_size[15:8] <= ioctl_dout;
-			'd52: hcart_size[7:0] <= ioctl_dout;
+			// 'd49: hcart_size[31:24] <= ioctl_dout; //This appears to be useless.
+			// 'd50: hcart_size[23:16] <= ioctl_dout;
+			// 'd51: hcart_size[15:8] <= ioctl_dout;
+			// 'd52: hcart_size[7:0] <= ioctl_dout;
 			'd53: cart_flags[15:8] <= ioctl_dout;
 			'd54: cart_flags[7:0] <= ioctl_dout;
-			'd55: joy0_type <= ioctl_dout;   // 0=none, 1=joystick, 2=lightgun
-			'd56: joy1_type <= ioctl_dout;
+			// 'd55: joy0_type <= ioctl_dout;   // 0=none, 1=joystick, 2=lightgun
+			// 'd56: joy1_type <= ioctl_dout;
 			'd57: cart_region <= ioctl_dout; // 0=ntsc, 1=pal
-			'd58: cart_save <= ioctl_dout;   // 0=none, 1=high score cart, 2=savekey
+			//'d58: cart_save <= ioctl_dout;   // 0=none, 1=high score cart, 2=savekey
 		endcase
 	end
 end
@@ -457,6 +460,9 @@ wire pada_0 = joya_b2 ? joya[4] : joya[9];
 wire pada_1 = joya_b2 ? joya[5] : joya[10];
 wire padb_0 = joyb_b2 ? joyb[4] : joyb[9];
 wire padb_1 = joyb_b2 ? joyb[5] : joyb[10];
+
+//      4     5     6     7      8     9  10
+// 	"J1,Fire1,Fire2,Pause,Select,Start,PU,PD;",
 
 assign idump = {padb_0, padb_1, pada_0, pada_1}; // // P2 F1, P2 F2, P1 F1, P1 F2 (or analog?)
 

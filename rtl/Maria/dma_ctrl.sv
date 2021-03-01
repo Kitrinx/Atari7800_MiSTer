@@ -1,6 +1,7 @@
 module dma_ctrl(
 	output logic [15:0] AddrB,
 	output logic        drive_AB,
+	output logic        end_of_zone,
 	input  logic [7:0]  DataB,
 	// from memory map
 	input logic [15:0]  ZP,
@@ -127,47 +128,47 @@ module dma_ctrl(
 						pixels_w = 1'd1;
 					end
 
-				w_PIXELS_slow: begin
-					if (char_ptr_cycles == 2'b11) begin
-						pixels_w = 1'd1;
-						AddrB = PP + 1'd1;
-					end else begin
-						AddrB = PP;
-					end
-				end
-
-				drive_char_addr: begin
-					AddrB = PP;
-				end
-
-				w_CHAR_PTR: begin
-					AddrB = {CB_plus_offset, DataB};
-				end
-
-				w_CHAR_PIXELS: begin
-					if (char_ptr_cycles == 2'b11) begin
-						pixels_w = 1;
-						if (~char_bytes_fetched & character_width) begin
-							AddrB = CHAR_PTR + 1'd1;
+					w_PIXELS_slow: begin
+						if (char_ptr_cycles == 2'b11) begin
+							pixels_w = 1'd1;
+							AddrB = PP + 1'd1;
 						end else begin
 							AddrB = PP;
 						end
-					end else begin
-						AddrB = CHAR_PTR;
 					end
-				end
+
+					drive_char_addr: begin
+						AddrB = PP;
+					end
+
+					w_CHAR_PTR: begin
+						AddrB = {CB_plus_offset, DataB};
+					end
+
+					w_CHAR_PIXELS: begin
+						if (char_ptr_cycles == 2'b11) begin
+							pixels_w = 1;
+							if (~char_bytes_fetched & character_width) begin
+								AddrB = CHAR_PTR + 1'd1;
+							end else begin
+								AddrB = PP;
+							end
+						end else begin
+							AddrB = CHAR_PTR;
+						end
+					end
 
 					drive_next_zp_addr: begin
-						AddrB = ZP_saved;
-					end
-					w_next_offset: begin
-						AddrB = ZP_saved;
-					end
-					w_next_DPL: begin
-						AddrB = ZP_saved;
-					end
-					w_next_DPH: begin
-						AddrB = ZP_saved;
+							AddrB = ZP_saved;
+						end
+						w_next_offset: begin
+							AddrB = ZP_saved;
+						end
+						w_next_DPL: begin
+							AddrB = ZP_saved;
+						end
+						w_next_DPH: begin
+							AddrB = ZP_saved;
 					end
 				endcase
 			end
@@ -258,12 +259,15 @@ module dma_ctrl(
 								dp_state <= drive_dp_addr;
 								state <= waiting;
 								dp_dma_done <= 1;
+								end_of_zone <= 1;
 								dp_dma_done_dli <= 1'b0;
 							end else if (zero_offset) begin // Found end of zone, but not end of frame
 								dp_state <= drive_next_zp_addr;
+								end_of_zone <= 1;
 								state <= dp_dma;
 							end else begin // Not at end of zone or frame. Get ready for next line in zone.
 								state <= waiting;
+								end_of_zone <= 0;
 								dp_state <= drive_dp_addr;
 								OFFSET <= OFFSET - 1'd1;
 								dp_dma_done <= 1'd1;
@@ -352,6 +356,7 @@ module dma_ctrl(
 								dp_state <= w_CHAR_PIXELS;
 								char_bytes_fetched <= 1'b1;
 								CHAR_PTR <= CHAR_PTR + 1'b1;
+								char_ptr_cycles <= 2'b00;
 							end else begin
 								if (WIDTH == 5'b0) begin
 									dp_state <= drive_dp_addr;
@@ -375,7 +380,7 @@ module dma_ctrl(
 					end
 					w_next_offset: begin //write cbits and offset
 						dp_state <= w_next_DPH;
-						DLIen_prev <= DLIen;
+						//DLIen_prev <= DLIen; // FIXME: Suspicious
 						{DLIen,A12en,A11en} <= DataB[7:5];
 						OFFSET <= DataB[3:0];
 						// AddrB <= ZP_saved;

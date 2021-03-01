@@ -1,21 +1,46 @@
-`timescale 1ns / 1ps
-/** Line buffer to VGA Interface
-*
-*  input lbuffer is the line buffer.
-*  For column c, 0 <= c < 640, where 0 is left and 639 is right,
-*  lbuffer[c][0] is RED, where 4'hF is the most intense red and
-*  4'h0 is the least intense red.
-*  lbuffer[c][1] is GREEN and lbuffer[c][2] is BLUE.
-*
-*  output line_number indicates the current row, where the top
-*  of the screen is 0 and 479 is the bottom of the screen. Other
-*  values indicate that no line is currently being drawn.
-*
-*  clk should be hooked up to a 25MHz clock (or 25.175 if available.)
-*  reset should be hooked up to system reset.
-*  RED, GREEN, BLUE, HSync, and VSync should be hooked up to the
-*  appropriate VGA pins.
-**/
+//              33.5 cycles @1.79 MHz       80 cycles @1.79 MHz
+//               134 cycles @7.16 MHz      320 cycles @7.16 MHz
+//     NTSC    <--67 pixels--> <-----------160 pixels------------->   PAL
+//      ______|_______________|____________________________________|_____
+//       ^    |               |                  ^                 |   ^
+//       |    |               |                  |                 |   |
+//       16   |<---HBLANK---->|               VBLANK               |   16
+//       |    |               |                  |                 |   |
+//       |    |               |                  |                 |   |
+// ______v____|_______________|__________________v_________________|___v______
+//  ^    ^    |               |                  ^                 |   ^    ^
+//  |    |    |               |                  |                 |   |    |
+//  |    25   |               |                  |                 |   25   |
+//  |    |    |               |                  |                 |   |    |
+//  |    |    |               |                  |                 |   |    |
+//  |   -v----|---------------|------------------|-----------------|---v-   |
+//  |    ^    |               |                  |                 |   ^    |
+//  |    |    |               |                  |                 |   |    |
+//  |    |    |               |                  |                 |   |    |
+//  |    |    |               |                  |                 |   |    |
+//  |    |    |               |                  |                 |   |    |
+// 243  192   |               |               VISIBLE              |  242  293
+//  |    |    |               |                  |                 |   |    |
+//  |    |    |               |                  |                 |   |    |
+//  |    |    |               |                  |                 |   |    |
+//  |    |    |               |                  |                 |   |    |
+//  |    |    |               |                  |                 |   |    |
+//  |   -v----|---------------|------------------|-----------------|---v-   |
+//  |    ^    |               |                  |                 |   ^    |
+//  |    |    |               |                  |                 |   |    |
+//  |    26   |               |                  |                 |   26   |
+//  |    |    |               |                  |                 |   |    |
+//  |    |    |               |                  |                 |   |    |
+// _v____v____|_______________|__________________v_________________|___v____v_
+//       ^    |               |                  ^                 |   ^
+//       |    |               |                  |                 |   |
+//       4    |               |               VBLANK               |   4
+//       |    |               |                  |                 |   |
+//       |    |               |                  |                 |   |
+//      _v____|_______________|__________________v_________________|___v_
+//            |<-------------------227 pixels--------------------->|
+//            |                    454 cycles @7.16 Mhz            |
+//                               113.5 cycles @1.79 MHz
 
 module uv_to_vga240 (
 	input logic        clk, reset,
@@ -29,35 +54,20 @@ module uv_to_vga240 (
 
 logic visible;
 
-// localparam VSYNC_START  = 10'd246;
-// localparam VSYNC_END    = 10'd250;
-// localparam VBLANK_START = 10'd242;
-// localparam VBLANK_END   = 10'd0;
-
-// localparam HSYNC_START  = 10'd384;
-// localparam HSYNC_END    = 10'd418;
-// localparam HBLANK_START = 10'd372;
-// localparam HBLANK_END   = 10'd0;
-
-// localparam MAX_ROW      = 10'd262;
-// localparam MAX_COLUMN   = 10'd453;
-//MCFG_SCREEN_RAW_PARAMS( 7159090, 454, 0, 320, 263, 27, 27 + 192 + 32 )
 localparam MAX_ROW      = 10'd262;
 localparam MAX_COLUMN   = 10'd453;
 
-localparam VBLANK_START = 10'd243;
-localparam VSYNC_START  = VBLANK_START + 10'd4;
-localparam VSYNC_END    = VSYNC_START + 10'd3;
+localparam VSYNC_END = 2;
+localparam VSYNC_START = 0;
+localparam VBLANK_START = MAX_ROW - 4;
+localparam VBLANK_END = VBLANK_START - 243;
 
-localparam HBLANK_START = 10'd320;
-localparam HSYNC_START  = HBLANK_START + 10'd35;
-localparam HSYNC_END    = HSYNC_START + 10'd34;
+localparam HBLANK_END = MAX_COLUMN - 320;
+localparam HSYNC_END = HBLANK_END - 100;
 
-// 53 - old cpu for FFFC
-// res falls 11 after
 
 always_ff @(posedge clk) if (reset) begin
-	row <= 10'd259;
+	row <= 0;
 	col <= 0;
 end else begin
 	col <= col + 10'd1;
@@ -69,15 +79,13 @@ end else begin
 		if (row >= MAX_ROW)
 			row <= 0;
 	end
-
-
 end
 
-assign VSync      = ((row >= VSYNC_START) && (row < VSYNC_END));
-assign vblank     = (row >= VBLANK_START);
+assign VSync      = (row <= VSYNC_END);
+assign vblank     = (row > VBLANK_START) || (row <= VBLANK_END);
 
-assign HSync      = (col >= HSYNC_START) & (col < HSYNC_END);
-assign hblank     = (col >= HBLANK_START);
+assign HSync      = col <= HSYNC_END;
+assign hblank     = col <= HBLANK_END;
 
 assign visible =  ~(vblank | hblank);
 

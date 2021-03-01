@@ -36,6 +36,7 @@ input logic [7:0] PAin, PBin,
 output logic [7:0] PAout, PBout
 );
 
+	assign ld[5:1] = '0;
 	assign ld[0] = lock_ctrl;
 	assign cart_sel = cart_cs;
 	assign bios_sel = bios_cs;
@@ -76,7 +77,7 @@ output logic [7:0] PAout, PBout
 	logic [7:0] core_DB_out;
 	logic [15:0] core_AB_out;
 
-	logic cpu_reset, core_halt_b, core_latch_data;
+	logic cpu_reset, core_halt_b;
 	logic [2:0] cpu_reset_counter;
 
 	assign IRQ_n = 1'b1;
@@ -200,7 +201,6 @@ output logic [7:0] PAout, PBout
 		.sysclk          (sysclk_7_143),
 		.pclk_2          (pclk_2),
 		.sel_slow_clock  (sel_slow_clock),
-		.core_latch_data (core_latch_data),
 		.tia_en          (tia_en),
 		.tia_clk         (tia_clk),
 		.pclk_0          (pclk_0),
@@ -247,10 +247,10 @@ output logic [7:0] PAout, PBout
 	 );
 
 `else
-	wire [7:0] i0 = idump[0] ? 8'd0 : 8'd192;
-	wire [7:0] i1 = idump[1] ? 8'd0 : 8'd192;
-	wire [7:0] i2 = idump[2] ? 8'd0 : 8'd192;
-	wire [7:0] i3 = idump[3] ? 8'd0 : 8'd192;
+	wire [7:0] i0 = ~idump[0] ? 8'd0 : 8'd192;
+	wire [7:0] i1 = ~idump[1] ? 8'd0 : 8'd192;
+	wire [7:0] i2 = ~idump[2] ? 8'd0 : 8'd192;
+	wire [7:0] i3 = ~idump[3] ? 8'd0 : 8'd192;
 
 
 
@@ -359,8 +359,7 @@ M6502C cpu_inst
 	.IRQ(~IRQ_n),
 	.NMI(CPU_NMI),
 	.RDY(RDY),
-	.halt_b(core_halt_b),
-	.latch_data(core_latch_data)
+	.halt_b(core_halt_b)
 );
 
 assign ld[6] = tia_en;
@@ -472,8 +471,7 @@ module M6502C
 	input IRQ,              // interrupt request
 	input NMI,              // non-maskable interrupt request
 	input RDY,              // Ready signal. Pauses CPU when RDY=0
-	input halt_b,           // halt!
-	input latch_data        // ???
+	input halt_b            // halt!
 );
 
 logic res;
@@ -540,7 +538,6 @@ T65 cpu (
 	.DO(DB_OUT)
 );
 
-logic [7:0] db_latch;
 
 always @(posedge sysclk) begin
 	old_clk <= pclk_0;
@@ -555,9 +552,6 @@ always @(posedge sysclk) begin
 
 	if (cpu_ce && ~cpu_halt)
 		p2_halt <= 0;
-
-	if (~cpu_halt)
-		db_latch <= DB_IN;
 
 	if (reset) begin
 		cpu_halt <= 0;

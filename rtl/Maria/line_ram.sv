@@ -34,16 +34,13 @@ logic [7:0]                 input_addr;
 logic [2:0]                 palette;
 logic                       wm;
 
-logic [2:0]               display_mode;
-assign display_mode = {wm, READ_MODE};
-
 logic [2:0]               playback_palette;
 logic [1:0]               playback_color;
 logic [4:0]               playback_cell;
 logic [8:0]               playback_ix;
 logic [7:0]               lram_ix;
 
-assign playback_ix = (LRAM_OUT_COL < 9'd320) ? LRAM_OUT_COL : 9'd0;
+assign playback_ix = (LRAM_OUT_COL > 9'd133) ? LRAM_OUT_COL - 9'd134 : 9'd0;
 
 always_comb begin
 	if (playback_color == 2'b0 || ~DMA_EN) begin
@@ -53,18 +50,18 @@ always_comb begin
 	end
 end
 
-logic [4:0] cell1, cell2, cell3, cell4;
-logic [4:0] pcell1, pcell2, pcell3, pcell4;
+// logic [4:0] cell1, cell2, cell3, cell4;
+// logic [4:0] pcell1, pcell2, pcell3, pcell4;
 
-assign cell1 = lram_in[input_addr];
-assign cell2 = lram_in[input_addr+1];
-assign cell3 = lram_in[input_addr+2];
-assign cell4 = lram_in[input_addr+3];
+// assign cell1 = lram_in[input_addr];
+// assign cell2 = lram_in[input_addr+1];
+// assign cell3 = lram_in[input_addr+2];
+// assign cell4 = lram_in[input_addr+3];
 
-assign pcell1 = lram_in[input_addr-4];
-assign pcell2 = lram_in[input_addr-3];
-assign pcell3 = lram_in[input_addr-2];
-assign pcell4 = lram_in[input_addr-1];
+// assign pcell1 = lram_in[input_addr-4];
+// assign pcell2 = lram_in[input_addr-3];
+// assign pcell3 = lram_in[input_addr-2];
+// assign pcell4 = lram_in[input_addr-1];
 
 // Assign playback_color and playback_palette based on
 // lram_in and playback_ix and display_mode

@@ -42,26 +42,29 @@ assign PB_out = out_b;
 
 wire [9:0] full_incr;
 
-always_comb begin
-	d_out = 8'hFF;
+always_ff @(posedge clk) if (ce) begin
 	if ((CS1 & ~CS2_n) && RW_n) begin
 		if (~RS_n) begin // RAM selected
-			d_out = riot_ram[addr];
+			d_out <= riot_ram[addr];
 		end else if (~addr[2]) begin // Address registers
 			case(addr[1:0])
-				2'b01: d_out = dir_a; // DDRA
-				2'b11: d_out = dir_b; // DDRB
-				2'b00: d_out = (out_a & dir_a) | (PA_in & ~dir_a); // Input A
-				2'b10: d_out = out_b; // Input B
+				2'b01: d_out <= dir_a; // DDRA
+				2'b11: d_out <= dir_b; // DDRB
+				2'b00: d_out <= (out_a & dir_a) | (PA_in & ~dir_a); // Input A
+				2'b10: d_out <= out_b; // Input B
 			endcase
 		end else begin // Timer & Interrupts
 			if (~addr[0])
-				d_out = timer[7:0];
+				d_out <= timer[7:0];
 			else
-				d_out = {interrupt[7:6], 6'd0};
+				d_out <= {interrupt[7:6], 6'd0};
 		end
 	end
+	if (~res_n)
+		d_out <= 8'hFF;
+end
 
+always_comb begin
 	case (time_incr)
 		2'b00: full_incr = 10'd0;
 		2'b01: full_incr = 10'd7;

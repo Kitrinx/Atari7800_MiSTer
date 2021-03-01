@@ -129,7 +129,7 @@ always_comb begin
 					rom_address = {1'b0, bank_map[address_index], address_in[12:0]};
 				3'd2: // No banking
 					rom_address = {2'b00, address_in - address_offset[15:0]};
-			endcase
+		endcase
 		end
 		//default: // High impedance
 	endcase

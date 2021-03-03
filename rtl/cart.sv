@@ -5,7 +5,7 @@
 // Covers the bank switching, ram, and audio hardware from carts
 module cart
 (
-	input  logic        maria_clock, clock, clock100, pclk_2,
+	input  logic        maria_clock, pokey_clock, clock,
 	input  logic [15:0] address_in,
 	input  logic [7:0]  din,
 	input  logic [7:0]  rom_din,
@@ -17,7 +17,7 @@ module cart
 	input  logic        reset,
 
 	output logic [7:0]  dout,
-	output logic [3:0]  pokey_audio,
+	output logic [15:0]  pokey_audio,
 	output logic [17:0] rom_address
 );
 
@@ -31,7 +31,6 @@ logic [2:0] bank_type; // 00 = Supergame, 01 = Activision, 02 = none
 logic [31:0] address_offset;
 logic [2:0] cart_cs_reg, cart_cs_reg_m;
 logic [3:0] bank_mask;
-logic mask_upper_bank;
 
 always_ff @(negedge clock) begin
 	hardware_map <= '{3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0};
@@ -39,7 +38,6 @@ always_ff @(negedge clock) begin
 	bank_type <= 3'b000;
 	address_offset <= 32'd0;
 	bank_mask <= 4'b1111;
-	mask_upper_bank <= 0;
 
 	// Banking mode selector
 	if (cart_flags[8]) begin                                   // Activision
@@ -63,7 +61,6 @@ always_ff @(negedge clock) begin
 	end else if (cart_flags[1] || cart_size >= 32'h10000) begin // SuperGame
 		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
 		bank_map <= '{4'd0, 4'd0, 4'd6, 4'd6, 4'd0, 4'd0, 4'd7, 4'd7};
-		mask_upper_bank <= cart_size == 32'hC000;
 		bank_map[4] <= bank_reg[3:0];
 		bank_map[5] <= bank_reg[3:0];
 		bank_mask <= (cart_size == 32'h10000) ? 4'b0011 : 4'b0111; // 64k carts have 4 banks mirrored
@@ -82,9 +79,9 @@ always_ff @(negedge clock) begin
 	end
 
 	// 450 POKEY
-	if (cart_flags[6]) begin // POKEY at $450
-		hardware_map[0] <= 3'd2;
-	end
+	// if (cart_flags[6]) begin // POKEY at $450
+	// 	hardware_map[0] <= 3'd2;
+	// end
 
 	// Alternative hardware at $4k selector
 	if (cart_flags[0]) begin // POKEY at $4k
@@ -114,8 +111,10 @@ assign address_index = address_in[15:13];
 always_comb begin
 	pokey_cs = 0;
 	ram_cs = 0;
-	rom_address = 17'd0;
-	if (cart_cs) case (hardware_map[address_index])
+	rom_address = 18'd0;
+	if (cart_flags[6] && address_in == 11'h450)
+		pokey_cs = 1;
+	else if (cart_cs) case (hardware_map[address_index])
 		3'd1: begin           // ROM Data
 			rom_address = {1'b0, address_in - address_offset[15:0]};
 		end
@@ -201,6 +200,45 @@ logic pokey4k_audio;
 // 	.aud(pokey4k_aud), //producing audio
 // 	.audio(pokey4k_audio)
 // 	.clk(clk100) //100mhz
+// );
+
+logic [3:0] ch0, ch1, ch2, ch3;
+logic [5:0] pokey_mux;
+
+always @(posedge maria_clock)
+	pokey_mux <= ch0 + ch1 + ch2 + ch3;
+
+assign pokey_audio = {pokey_mux, 10'd0};
+// pokey the_penguin (
+// 	.CLK(pokey_clock),
+// 	.ENABLE_179(1),
+// 	.ADDR(address_in[3:0]),
+// 	.DATA_IN(din),
+// 	.WR_EN(~rw & pokey_cs),
+// 	.RESET_N(~reset),
+// 	.keyboard_scan_enable(),
+// 	.keyboard_scan(),
+// 	.keyboard_response(),
+
+// 	.POT_IN(),
+// 	.SIO_IN1(),
+// 	.SIO_IN2(),
+// 	.SIO_IN3(),
+// 	.DATA_OUT(pokey4k_dout),
+// 	.CHANNEL_0_OUT(ch0),
+// 	.CHANNEL_1_OUT(ch1),
+// 	.CHANNEL_2_OUT(ch2),
+// 	.CHANNEL_3_OUT(ch3),
+
+// 	.IRQ_N_OUT(),
+// 	.SIO_OUT1(),
+// 	.SIO_OUT2(),
+// 	.SIO_OUT3(),
+// 	.SIO_CLOCKIN_IN(),
+// 	.SIO_CLOCKIN_OUT(),
+// 	.SIO_CLOCKIN_OE(),
+// 	.SIO_CLOCKOUT(),
+// 	.POT_RESET()
 // );
 
 endmodule: cart

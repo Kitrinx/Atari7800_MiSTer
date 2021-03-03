@@ -14,7 +14,7 @@ module maria(
 	// Clocking
 	input logic        reset_s,
 	input logic        sysclk, vidclk, pclk_2,
-	output logic       tia_clk, pclk_0, sel_slow_clock,
+	output logic       tia_clk, pclk_0, sel_slow_clock, pokey_clock,
 
 	// Memory Map Select lines
 	output `chipselect  CS,
@@ -167,6 +167,7 @@ SYNC	video sync output
 		.pclk_2(pclk_2),
 		.pclk_0(pclk_0),
 		.tia_clk(tia_clk),
+		.pokey_clock(pokey_clock),
 		// Signals needed to slow pclk_0
 		.sel_slow_clock(sel_slow_clock),
 		// Outputs to 6502

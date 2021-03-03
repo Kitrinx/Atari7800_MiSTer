@@ -176,7 +176,7 @@ assign USER_OUT  = '1;
 
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 
-assign AUDIO_S   = 1;
+assign AUDIO_S   = 0;
 assign AUDIO_MIX = 0;
 
 assign LED_USER  = ld[7];
@@ -314,10 +314,10 @@ Atari7800 main
 	// Cart Interface
 	.cart_sel     (cart_sel),
 	.cart_out     (cart_data),
-	.cart_size    (cart_size),
+	.cart_size    (cart_is_7800 ? hcart_size : cart_size),
 	.cart_addr_out(cart_addr),
-	.cart_flags   (cart_flags[9:0]),
-	.cart_region  (cart_region[0]),
+	.cart_flags   (cart_is_7800 ? cart_flags[9:0] : 10'd0),
+	.cart_region  (cart_is_7800 ? cart_region[0] : 1'b0),
 
 	// BIOS
 	.bios_sel     (bios_sel),
@@ -375,10 +375,10 @@ always_ff @(posedge clk_sys) begin
 			'd03: cart_header[23:16] <= ioctl_dout;
 			'd04: cart_header[15:8] <= ioctl_dout;
 			'd05: cart_header[7:0] <= ioctl_dout;
-			// 'd49: hcart_size[31:24] <= ioctl_dout; //This appears to be useless.
-			// 'd50: hcart_size[23:16] <= ioctl_dout;
-			// 'd51: hcart_size[15:8] <= ioctl_dout;
-			// 'd52: hcart_size[7:0] <= ioctl_dout;
+			'd49: hcart_size[31:24] <= ioctl_dout; //This appears to be useless.
+			'd50: hcart_size[23:16] <= ioctl_dout;
+			'd51: hcart_size[15:8] <= ioctl_dout;
+			'd52: hcart_size[7:0] <= ioctl_dout;
 			'd53: cart_flags[15:8] <= ioctl_dout;
 			'd54: cart_flags[7:0] <= ioctl_dout;
 			// 'd55: joy0_type <= ioctl_dout;   // 0=none, 1=joystick, 2=lightgun
@@ -468,7 +468,7 @@ assign idump = {padb_0, padb_1, pada_0, pada_1}; // // P2 F1, P2 F2, P1 F1, P1 F
 
 ////////////////////////////  VIDEO  ////////////////////////////////////
 
-wire [3:0] R,G,B;
+wire [7:0] R,G,B;
 wire HSync;
 wire VSync;
 wire HBlank;
@@ -493,9 +493,9 @@ video_mixer video_mixer
 //	.scanlines(0),
 //	.mono(0),
 
-	.R({R,R}),
-	.G({G,G}),
-	.B({B,B})
+	.R(R),
+	.G(G),
+	.B(B)
 );
 
 endmodule

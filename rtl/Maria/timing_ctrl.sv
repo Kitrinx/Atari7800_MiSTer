@@ -6,7 +6,7 @@
 // Number of sysclk cycles that the cpu gets at the start of a line 7 cpu * 4 maria
 `define START_OF_LINE_CYCLES 28
 
-`define SHUTDOWN_CYCLES 7
+`define SHUTDOWN_CYCLES 14
 
 // At which column we terminate DP DMA
 `define DP_DMA_KILL_COL 453 - `SHUTDOWN_CYCLES
@@ -39,6 +39,7 @@ module timing_ctrl (
 	// Clocking
 	input  logic       sysclk, reset, pclk_2,
 	output logic       pclk_0, tia_clk,
+	output logic       pokey_clock,
 	input  logic       sel_slow_clock,
 	input  logic       hblank,
 
@@ -93,7 +94,8 @@ module timing_ctrl (
 	logic [4:0]        startup_ctr;
 	logic              cooldown_count;
 	logic              old_hblank;
-	logic              dma_killed;
+
+	assign pokey_clock = ~fast_clk;
 
 	enum logic [3:0] {
 		VWAIT = 4'h0,           // Waiting for VSYNC to complete before starting ZP DMA
@@ -126,13 +128,15 @@ module timing_ctrl (
 	assign pclk_0 = sel_slow_clock ? slow_clk : fast_clk;
 	
 	assign ready_for_lswap = ((vga_col > `VGA_VISIBLE_COLS));
-	assign lram_swap = new_hblank;//(ready_for_lswap & 
+	assign lram_swap = new_hblank & enabled_last_line;//(ready_for_lswap & 
 							// (((state == DP_DMA) & (dp_dma_done | dp_dma_kill)) || 
 							// (state == DP_DMA_WAITSWAP)));
 
 	wire new_hblank = ~old_hblank && hblank;
 
 	logic [8:0] cpu_tick_count;
+
+	logic enabled_last_line;
 
 	always @(posedge pclk_0) begin
 		if (new_hblank)
@@ -155,7 +159,6 @@ module timing_ctrl (
 			int_b_sr <= 6'b111111;
 			raise_dli <= 1'b0;
 			startup_ctr <= 4'd0;
-			dma_killed <= 0;
 			dli_next <= 1'b0;
 			halt_b <= 1'b1;
 			zp_dma_start <= 1'b0;
@@ -163,6 +166,7 @@ module timing_ctrl (
 			ready_for_lswap_prev <= 1'b0;
 			ready <= 1'b1;
 			tia_clk <= 1'b0;
+			enabled_last_line <= 0;
 		end else begin
 			old_hblank <= hblank;
 			// Clock generation
@@ -190,6 +194,12 @@ module timing_ctrl (
 				end
 				`endif
 			end
+
+			if (enable)
+				enabled_last_line <= 1;
+
+			if (new_hblank)
+				enabled_last_line <= 0;
 
 			// Interrupt generation
 			int_b_sr <= {int_b_sr[4:0], ~(dli_next)};
@@ -231,7 +241,7 @@ module timing_ctrl (
 				end
 			end
 			HWAIT: begin
-				if (vga_col < `START_OF_LINE_CYCLES) begin
+				if (vga_col < `START_OF_LINE_CYCLES) begin // FIXME: This should be based on CPU ticks.
 						halt_b <= 1;
 						if (enable) begin
 							state <= START_OF_LINE;
@@ -300,13 +310,12 @@ module timing_ctrl (
 				// 	halt_b <= 1'b0;
 				// 	cooldown_count <= `COOLDOWN_CYCLES;
 				// end else 
-				if (dp_dma_done | dp_dma_kill) begin
-					dma_killed <= dp_dma_kill;
+				if (dp_dma_done /*| dp_dma_kill*/) begin
 					halt_b <= 1'b0;
 					raise_dli <= dp_dma_done_dli;
 					cooldown_count <= `COOLDOWN_CYCLES;
 					//if (ready_for_lswap) begin
-					state <= DP_DMA_WAITSWAP;
+					state <= last_line ? VWAIT_COOLDOWN : HWAIT_COOLDOWN;
 					// end else begin
 					// 	state <= DP_DMA_WAITSWAP;
 					// end
@@ -316,11 +325,10 @@ module timing_ctrl (
 				if (cooldown_count == 0) begin
 					if ((sel_slow_clock && slow_ctr != 2'b10) ||
 							(~sel_slow_clock && fast_clk == 1'b1)) begin
-						if (~dma_killed)
-							halt_b <= 1'b1;
+						halt_b <= 1'b1;
 						raise_dli <= 1'b0;
 						dli_next <= raise_dli;
-						state <= last_line ? VWAIT : HWAIT;
+						state <= last_line ? VWAIT_COOLDOWN : HWAIT_COOLDOWN;
 					end
 				end else begin
 					cooldown_count <= cooldown_count - 1'd1;

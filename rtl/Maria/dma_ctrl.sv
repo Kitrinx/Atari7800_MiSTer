@@ -22,7 +22,7 @@ module dma_ctrl(
 	logic [15:0]        PP; 
 	logic [15:0]        ZP_saved, ZP_saved_next;
 	logic [15:0]         CHAR_PTR;
-	logic [1:0]         char_ptr_cycles;
+	logic [2:0]         char_ptr_cycles;
 	logic               char_bytes_fetched;
 	logic [4:0]         WIDTH;
 	logic [3:0]         OFFSET;
@@ -43,7 +43,7 @@ module dma_ctrl(
 		w_PALETTE_WIDTH_2 = 5'h04,
 		w_INPUT = 5'h05,
 		drive_pp_addr = 5'h06,
-		w_PIXELS = 5'h07,
+		w_WAIT = 5'h07,
 		w_PIXELS_slow = 5'h08,
 		drive_char_addr = 5'h09,
 		w_CHAR_PTR = 5'ha,
@@ -61,6 +61,9 @@ module dma_ctrl(
 	
 	logic [7:0] CB_plus_offset;
 	assign CB_plus_offset = char_base + {4'b0, OFFSET};
+
+	logic [15:0] CB_addr;
+	assign CB_addr = {CB_plus_offset, DataB};
 	
 	logic CB_in_cart;
 	assign CB_in_cart = |(CB_plus_offset[7:6]);
@@ -76,105 +79,105 @@ module dma_ctrl(
 	logic [15:0] PP_plus_offset;
 	assign PP_plus_offset = PP + {4'b0, OFFSET, 8'b0};
 
-	always_comb begin
-		AddrB = 'h1234;
-		wm_w = 0;
-		palette_w = 0;
-		input_w = 0;
-		pixels_w = 0;
+	always_ff @(negedge sysclk) begin
+		AddrB <= 'h1234;
+		wm_w <= 0;
+		palette_w <= 0;
+		input_w <= 0;
+		pixels_w <= 0;
 		case (state)
 			zp_dma: begin
-				AddrB = ZP_saved;
+				AddrB <= ZP_saved;
 			end
 			dp_dma: begin
-				AddrB = 16'hx;
+				AddrB <= 16'hx;
 				case (dp_state)
 					drive_dp_addr: begin
-						AddrB = DP_saved;
+						AddrB <= DP_saved;
 					end
 
 					w_PPL: begin
-						AddrB = DP_saved;
+						AddrB <= DP_saved;
 					end
 
 					w_PALETTE_WIDTH: begin
-						AddrB = DP_saved;
+						AddrB <= DP_saved;
 						if (~null_data) begin
-							wm_w = null_width;
-							palette_w = ~null_width;
+							wm_w <= null_width;
+							palette_w <= ~null_width;
 						end
 					end
 
 					w_PPH: begin
-						AddrB = DP_saved;
+						AddrB <= DP_saved;
 					end
 
 					w_PALETTE_WIDTH_2: begin
-						AddrB = DP_saved;
-						palette_w = 1;
+						AddrB <= DP_saved;
+						palette_w <= 1;
 					end
 
 					w_INPUT: begin
-						AddrB = DP_saved;
-						input_w = 1;
+						AddrB <= DP_saved;
+						input_w <= 1;
 					end
 
 					drive_pp_addr: begin
-						AddrB = PP_plus_offset;
+						AddrB <= PP_plus_offset;
 					end
 
-					w_PIXELS: begin
-						AddrB = PP + 1'd1;
-						pixels_w = 1'd1;
+					w_WAIT: begin
+						AddrB <= DP_saved;
 					end
 
 					w_PIXELS_slow: begin
-						if (char_ptr_cycles == 2'b11) begin
-							pixels_w = 1'd1;
-							AddrB = PP + 1'd1;
+						if (char_ptr_cycles == 3'd2) begin
+							pixels_w <= 1'd1;
+							AddrB <= PP + 1'd1;
 						end else begin
-							AddrB = PP;
+							AddrB <= PP;
 						end
 					end
 
 					drive_char_addr: begin
-						AddrB = PP;
+						AddrB <= PP;
 					end
 
 					w_CHAR_PTR: begin
-						AddrB = {CB_plus_offset, DataB};
+						AddrB <= {CB_plus_offset, DataB};
 					end
 
 					w_CHAR_PIXELS: begin
-						if (char_ptr_cycles == 2'b11) begin
-							pixels_w = 1;
+						if (char_ptr_cycles == (character_width ? 3'd6 : 3'd4)) begin
+							pixels_w <= 1;
 							if (~char_bytes_fetched & character_width) begin
-								AddrB = CHAR_PTR + 1'd1;
+								AddrB <= CHAR_PTR + 1'd1;
 							end else begin
-								AddrB = PP;
+								AddrB <= PP;
 							end
 						end else begin
-							AddrB = CHAR_PTR;
+							AddrB <= CHAR_PTR;
 						end
 					end
 
 					drive_next_zp_addr: begin
-							AddrB = ZP_saved;
+							AddrB <= ZP_saved;
 						end
 						w_next_offset: begin
-							AddrB = ZP_saved;
+							AddrB <= ZP_saved;
 						end
 						w_next_DPL: begin
-							AddrB = ZP_saved;
+							AddrB <= ZP_saved;
 						end
 						w_next_DPH: begin
-							AddrB = ZP_saved;
+							AddrB <= ZP_saved;
 					end
 				endcase
 			end
 		endcase
 	end
 
+	logic kill_dma;
 	always_ff @(posedge sysclk, posedge reset) begin
 		if (reset) begin
 			state <= waiting;
@@ -188,6 +191,7 @@ module dma_ctrl(
 		end else begin
 			case (state)
 			waiting: begin
+				kill_dma <= 0;
 				if (zp_dma_start) begin
 					state <= zp_dma;
 					ZP_saved <= ZP;
@@ -204,20 +208,17 @@ module dma_ctrl(
 				case (zp_state)
 					drive_zp_addr: begin // Read zp
 						zp_state <= w_offset;
-						// AddrB = ZP_saved;
 						ZP_saved <= ZP_saved_next;
 					end
 					w_offset: begin //write cbits and offset
 						zp_state <= w_DPH;
 						{DLIen,A12en,A11en} <= DataB[7:5];
 						OFFSET <= DataB[3:0];
-						// AddrB = ZP_saved_next;
 						ZP_saved <= ZP_saved_next;
 					end
 					w_DPH: begin //Write DPH
 						zp_state <= w_DPL;
 						DP[15:8] <= DataB;
-						// AddrB = ZP_saved;
 						ZP_saved <= ZP_saved_next;
 					end
 					w_DPL: begin //Write DPL
@@ -235,26 +236,24 @@ module dma_ctrl(
 			dp_dma: begin
 				if (dp_dma_kill) begin
 					dp_state <= drive_dp_addr;
-					state <= waiting;
-					dp_dma_done <= 1'b1;
+					kill_dma <= 1;
 				end else case (dp_state)
-					drive_dp_addr: begin //read from dp
+					drive_dp_addr: begin //read from dp Byte 0 read
 						dp_state <= w_PPL;
-						// AddrB = DP_saved;
 						DP_saved <= DP_saved + 1'd1;
 						five_byte_mode <= 0;
 						INDIRECT_MODE <= 0;
 					end
-					w_PPL: begin //Write PPL
+					w_PPL: begin //Write PPL // Byte 1 read
 						dp_state <= w_PALETTE_WIDTH;
 						PP[7:0] <= DataB;
-						// AddrB = DP_saved;
 						DP_saved <= DP_saved + 1'd1;
 					end
-					w_PALETTE_WIDTH:
+					w_PALETTE_WIDTH: // Byte 2 read
 						// Write palette/width or determine 5b
 						// mode or find end of DP list
-						if (null_data) begin //Found end of DP list
+						if (null_data || kill_dma) begin //Found end of DP list
+							kill_dma <= 0;
 							if (last_line) begin // Found end of frame
 								dp_state <= drive_dp_addr;
 								state <= waiting;
@@ -275,65 +274,63 @@ module dma_ctrl(
 						end else begin
 							// Write palette and width or determine its 5b mode
 							dp_state <= w_PPH;
+							char_ptr_cycles <= 0;
 							five_byte_mode <= null_width;
 							INDIRECT_MODE <= null_width & DataB[5];
-							// wm_w <= null_width;
-							// ind_w <= null_width;
-							// palette_w <= ~null_width;
 							WIDTH <= DataB[4:0];
-							// AddrB <= DP;
 							DP_saved <= DP_saved + 1'd1;
 						end
-					w_PPH: begin //Write PPH
-						dp_state <= (five_byte_mode) ? w_PALETTE_WIDTH_2 : w_INPUT;
-						PP[15:8] <= DataB;
-						// AddrB <= DP;
-						DP_saved <= DP_saved + 1'd1;
+					w_PPH: begin //Write PPH // Byte 3 read
+							dp_state <= (five_byte_mode) ? w_PALETTE_WIDTH_2 : w_INPUT;
+							PP[15:8] <= DataB;
+							DP_saved <= DP_saved + 1'd1;
+
 					end
-					w_PALETTE_WIDTH_2: begin //Write palette and width for realzies
+					w_PALETTE_WIDTH_2: begin //Write palette and width for realzies // Five byte mode byte 4.
 						dp_state <= w_INPUT;
-						// palette_w <= 1;
 						WIDTH <= DataB[4:0];
-						// AddrB <= DP;
 						DP_saved <= DP_saved + 1'd1;
 					end
-					w_INPUT: begin //write INPUT
-						if (INDIRECT_MODE) begin
-							dp_state <= drive_char_addr;
+					w_WAIT: begin //Write Pixel data
+						if (char_ptr_cycles == (five_byte_mode ? 3'd1 : 3'd0)) begin // Random whatever to get timing working
+							if (INDIRECT_MODE) begin
+								if (CB_addr[15] && (A12en & CB_addr[12]) | (A11en & CB_addr[11]))
+									dp_state <= drive_dp_addr;
+								else
+									dp_state <= drive_char_addr;
+							end else begin
+								if (PP_plus_offset[15] && (A12en & PP_plus_offset[12]) | (A11en & PP_plus_offset[11]))
+									dp_state <= drive_dp_addr;
+								else
+									dp_state <= drive_pp_addr;
+							end
 						end else begin
-							if ((A12en & PP_plus_offset[12]) | (A11en & PP_plus_offset[11]))
-								dp_state <= drive_dp_addr;
-							else
-								dp_state <= drive_pp_addr;
+							char_ptr_cycles <= char_ptr_cycles + 1'd1;
 						end
-						// palette_w <= 0;
-						// AddrB <= DP;
-						// input_w <= 1;
+					end
+					// Really, each byte of the header should consume two maria clocks each. In this design,
+					// they only consume 1 cycle each. Consequently, we burn off the extra cycles to make
+					// timing correct. The input block consumes an unaccounted for cycle itself, so it
+					// counts as part of the padding.
+					w_INPUT: begin // Startup cycle - not a byte?
+						dp_state <= w_WAIT;
+						char_ptr_cycles <= 0;
 					end
 					drive_pp_addr: begin //read from pp
-						if (PP_in_cart) begin
-							dp_state <= w_PIXELS_slow;
-							char_ptr_cycles <= 2'b00;
-						end else begin
-							dp_state <= w_PIXELS;
-						end
+						dp_state <= w_PIXELS_slow;
+						char_ptr_cycles <= 3'd0;
+
 						WIDTH <= WIDTH + 1'd1;
 						PP <= PP_plus_offset;
 					end
-					w_PIXELS: begin //Write Pixel data
-						PP <= PP + 1'd1;
-						WIDTH <= WIDTH + 1'd1;
-						dp_state <= (WIDTH == 5'b0) ? drive_dp_addr : w_PIXELS;
-					end
+
 					w_PIXELS_slow: begin
-						// Similar to w_CHAR_PIXELS in that we wait 4 cycles,
-						// but similar to w_PIXELS otherwise
-						if (char_ptr_cycles == 2'b11) begin
+						if (char_ptr_cycles == 3'd2) begin
 							// Data is ready on the data bus
 							WIDTH <= WIDTH + 1'd1;
 							PP <= PP + 1'd1;
 							dp_state <= (WIDTH == 5'b0) ? drive_dp_addr: w_PIXELS_slow;
-							char_ptr_cycles <= 2'b00;
+							char_ptr_cycles <= 0;
 						end else begin
 							char_ptr_cycles <= char_ptr_cycles + 1'b1;
 						end
@@ -347,16 +344,15 @@ module dma_ctrl(
 						dp_state <= w_CHAR_PIXELS;
 						CHAR_PTR <= {CB_plus_offset, DataB};
 						char_bytes_fetched <= 1'b0;
-						char_ptr_cycles <= (CB_in_cart) ? 2'b00 : 2'b11;
+						char_ptr_cycles <= 0;
 					end
 
 					w_CHAR_PIXELS: begin
-						if (char_ptr_cycles == 2'b11) begin
+						if (char_ptr_cycles == (character_width ? 3'd6 : 3'd4)) begin
 							if (~char_bytes_fetched & character_width) begin
 								dp_state <= w_CHAR_PIXELS;
 								char_bytes_fetched <= 1'b1;
 								CHAR_PTR <= CHAR_PTR + 1'b1;
-								char_ptr_cycles <= 2'b00;
 							end else begin
 								if (WIDTH == 5'b0) begin
 									dp_state <= drive_dp_addr;
@@ -375,21 +371,17 @@ module dma_ctrl(
 					//Loading next zp when OFFSET has been decremented to 0
 					drive_next_zp_addr: begin //Read zp
 						dp_state <= w_next_offset;
-						// AddrB <= ZP_saved;
 						ZP_saved <= ZP_saved_next;
 					end
 					w_next_offset: begin //write cbits and offset
 						dp_state <= w_next_DPH;
-						//DLIen_prev <= DLIen; // FIXME: Suspicious
 						{DLIen,A12en,A11en} <= DataB[7:5];
 						OFFSET <= DataB[3:0];
-						// AddrB <= ZP_saved;
 						ZP_saved <= ZP_saved_next;
 					end
 					w_next_DPH: begin //Write DPH
 						dp_state <= w_next_DPL;
 						DP[15:8] <= DataB;
-						// AddrB <= ZP_saved;
 						ZP_saved <= ZP_saved_next;
 					end
 					w_next_DPL: begin //Write DPH

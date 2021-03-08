@@ -1,6 +1,8 @@
 `include "atari7800.vh"
 
 module memory_map (
+	input  logic mclk0,
+	input  logic mclk1,
 	input  logic             maria_en,
 	input  logic             tia_en,
 	input  logic [15:0]      AB,
@@ -23,8 +25,9 @@ module memory_map (
 
 	// when wait_sync is written to, ready is deasserted
 	output logic             deassert_ready, zp_written,
+	output logic             ctrl_written,
 
-	input logic              sysclock, reset_b, pclk_0, pclk_2
+	input logic              sysclock, reset_b, pclk0
 );
 
 	logic [3:0]              signals_out;
@@ -114,33 +117,34 @@ module memory_map (
 
 	end // always_comb
 
-	always_ff @(posedge pclk_2, negedge reset_b) begin
+	always_ff @(posedge sysclock) begin
 		if (~reset_b) begin
 			ctrl <= {1'b0, 2'b10, 1'b0, 1'b0, 1'b0, 2'b00}; // 8'b0
-			//color_map <= 200'b0;
+			color_map <= 200'b0;
 			//////// TESTING COLOR MAP /////////
-			// Background
-			color_map[0] <= 8'h0c;
-			// Palette 0
-			color_map[3:1] <= {8'h32, 8'h55, 8'h55};
-			// Palette 1
-			color_map[6:4] <= {8'h83, 8'h55, 8'h55};
-			// Palette 2
-			color_map[9:7] <= {8'h1c, 8'h55, 8'h55};
-			// Palette 3
-			color_map[12:10] <= {8'h25, 8'h55, 8'h55};
-			// Palette 4
-			color_map[15:13] <= {8'hda, 8'h55, 8'h55};
+			// // Background
+			// color_map[0] <= 8'h0c;
+			// // Palette 0
+			// color_map[3:1] <= {8'h32, 8'h55, 8'h55};
+			// // Palette 1
+			// color_map[6:4] <= {8'h83, 8'h55, 8'h55};
+			// // Palette 2
+			// color_map[9:7] <= {8'h1c, 8'h55, 8'h55};
+			// // Palette 3
+			// color_map[12:10] <= {8'h25, 8'h55, 8'h55};
+			// // Palette 4
+			// color_map[15:13] <= {8'hda, 8'h55, 8'h55};
 
-			color_map[24:16] <= 'b0;
+			// color_map[24:16] <= 'b0;
 
 			//wait_sync <= 8'b0;
 			char_base <= 8'b0;
 			{ZPH,ZPL} <= {8'h18, 8'h20};
 			zp_byte_written <= 2'b0;
+			ctrl_written <= 0;
 		end
 
-		else begin
+		else if (pclk0) begin
 			deassert_ready <= 1'b0;
 			//Handle writes to mem mapped regs
 			case(write_addr_found)
@@ -181,7 +185,10 @@ module memory_map (
 			  8'h39: color_map[19] <= DB_in;
 			  8'h3a: color_map[20] <= DB_in;
 			  8'h3b: color_map[21] <= DB_in;
-			  8'h3c: ctrl <= DB_in;
+			  8'h3c: begin
+				  ctrl <= DB_in;
+				  ctrl_written <= 1;
+			  end
 			  8'h3d: color_map[22] <= DB_in;
 			  8'h3e: color_map[23] <= DB_in;
 			  8'h3f: color_map[24] <= DB_in;
@@ -200,15 +207,15 @@ module memory_map (
 				8'h29: DB_out <= color_map[7];
 				8'h2a: DB_out <= color_map[8];
 				8'h2b: DB_out <= color_map[9];
-				//8'h2c: DB_out <= ZPH; // Write Only
+				8'h2c: DB_out <= ZPH; // Write Only
 				8'h2d: DB_out <= color_map[10];
 				8'h2e: DB_out <= color_map[11];
 				8'h2f: DB_out <= color_map[12];
-				//8'h30: DB_out <= ZPL; // Write Only
+				8'h30: DB_out <= ZPL; // Write Only
 				8'h31: DB_out <= color_map[13];
 				8'h32: DB_out <= color_map[14];
 				8'h33: DB_out <= color_map[15];
-				//8'h34: DB_out <= char_base; // Write Only
+				8'h34: DB_out <= char_base; // Write Only
 				8'h35: DB_out <= color_map[16];
 				8'h36: DB_out <= color_map[17];
 				8'h37: DB_out <= color_map[18];
@@ -216,7 +223,7 @@ module memory_map (
 				8'h39: DB_out <= color_map[19];
 				8'h3a: DB_out <= color_map[20];
 				8'h3b: DB_out <= color_map[21];
-				//8'h3c: DB_out <= ctrl; // Write only
+				8'h3c: DB_out <= ctrl; // Write only
 				8'h3d: DB_out <= color_map[22];
 				8'h3e: DB_out <= color_map[23];
 				8'h3f: DB_out <= color_map[24];

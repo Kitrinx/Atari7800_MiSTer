@@ -1,81 +1,81 @@
-`timescale 1ns / 1ps
 `include "atari7800.vh"
 
-
 module maria(
+	output logic        mclk0,
+	input  logic        halt_unlock,
 	input  logic [15:0] AB_in,
 	output logic [15:0] AB_out,
 	output logic        drive_AB,
+	input  logic        hide_border,
+	input  logic        PAL,
 
 	input  logic  [7:0] read_DB_in,
 	input  logic  [7:0] write_DB_in,
 	output logic  [7:0] DB_out,
+	output logic        pclk0,
+	output logic        pclk1,
+	input logic         pclk2,
 
 	// Clocking
-	input logic        reset_s,
-	input logic        sysclk, vidclk, pclk_2,
-	output logic       tia_clk, pclk_0, sel_slow_clock, pokey_clock,
+	input logic         reset,
+	input logic         clk_sys, 
+	output logic        tia_clk, 
+	output logic        sel_slow_clock, 
 
 	// Memory Map Select lines
 	output `chipselect  CS,
-	input logic        bios_en,
-	input logic        tia_en,
-	//output logic       ram0_b, ram1_b, p6532_b, tia_b,
-	//output logic       riot_ram_b,
+	input logic         bios_en,
+	input logic         tia_en,
 
 	// Maria configuration
-	input logic        RW, enable,
+	input logic         RW, 
+	input logic         maria_en,
 
 	// VGA Interface
-	output logic [7:0] UV_out,
-	output logic [3:0] red, green, blue,
-	output logic hsync, vsync, hblank, vblank,
+	output logic [7:0]  UV_out,
+	output logic [3:0]  red,
+	output logic [3:0]  green,
+	output logic [3:0]  blue,
+	output logic        hsync,
+	output logic        vsync,
+	output logic        hblank,
+	output logic        vblank,
+	output logic [12:0] cpu_ticks,
+	output logic [12:0] halted_ticks,
+	output logic [12:0] driven_ticks,
 
 	// Outputs to 6502
-	output logic       int_b, halt_b, ready
+	output logic        int_b,
+	output logic        halt_b,
+	output logic        ready
 );
 
-/*
-A0-A15	memory address bus
-D0-D7	memory data bus
-Vss	ground
-Vdd	power
-/NMI	output to cpu
-XTAL1	14 MHz input
-XTAL2	main clock output
-MEN	Maria enable input. When lo, video is off and memory map is 2600
-Ø2	phase 2 clock input
-TCLK	TIA main/4 clock
-Ø0	phase 0 clock output. 1.79M or 1.19M
-DEL	delay line control voltage input
-/SRAM0-1	RAM chipselects
-/SEL32	RIOT chipselect
-/TIASEL	TIA chipselect
-R/W	Read/write input
-/HALT	cpu halt output
-READY	cpu ready output
-LUM0-3	luminance output
-COLOR	color output
-BLANK	blank output
-SYNC	video sync output
-*/
+	assign halt_b = ~halt_en;
 
-
-	// Bus interface
-	// Defined as ports.
-	//logic        drive_AB;
-	//logic [15:0] AB_in, AB_out;
-	//logic        drive_DB;
-	//logic  [7:0] DB_in, DB_out;
-	//assign DB = drive_DB ? DB_out : 'bz;
-	//assign AB = drive_AB ? AB_out : 'bz;
-	//assign DB_in = DB;
-	//assign AB_in = AB;
-
-	// For testing DMA.
-	//assign DB_in = DB;
-	//assign AB = AB_out;
-	//assign AB_in = AB_out;
+	/* Original Pins:
+		A0-A15        memory address bus
+		D0-D7         memory data bus
+		Vss           ground
+		Vdd           power
+		/NMI          output to cpu
+		XTAL1         14 MHz input
+		XTAL2         main clock output
+		MEN           Maria enable input. When lo, video is off and memory map is 2600
+		Ø2            phase 2 clock input
+		TCLK          TIA main/4 clock
+		Ø0            phase 0 clock output. 1.79M or 1.19M
+		DEL           delay line control voltage input
+		/SRAM0-1      RAM chipselects
+		/SEL32        RIOT chipselect
+		/TIASEL       TIA chipselect
+		R/W           Read/write input
+		/HALT         cpu halt output
+		READY         cpu ready output
+		LUM0-3        luminance output
+		COLOR         color output
+		BLANK         blank output
+		SYNC          video sync output
+	*/
 
 	//// Memory Mapped Registers
 	// Control register format:
@@ -92,7 +92,7 @@ SYNC	video sync output
 	logic [7:0]       char_base;
 	logic [15:0]      ZP;
 
-	logic [9:0] vga_row, vga_col;
+	logic [9:0]       row, col;
 
 	//// Signals from memory_map to timing_ctrl
 	logic             deassert_ready, zp_written;
@@ -114,151 +114,246 @@ SYNC	video sync output
 	//// Control signals between timing_ctrl and line_ram
 	logic             lram_swap;
 	
-	logic reset;
 	logic [3:0] reset_delay;
 
-	assign reset = reset_s;
+	logic mclk1;
+	logic border;
+	logic prst;
+	logic vbe;
+	logic hbs;
+	logic lrc;
+	logic [2:0] palette;
+	logic wm;
+	logic [7:0] hpos;
+	logic clear_hpos;
+	logic pclk0_latch;
+	logic pclk1_latch;
+	logic halt_en;
+	logic DLI_en;
+	logic dli_latch;
+	logic [1:0] edge_counter;
+	logic clk_toggle;
+	logic old_dli;
+	logic [2:0]        clock_div, clock_p1_div;
+	logic latch_byte;
+	logic ctrl_written;
+	logic pclk_toggle;
+	logic old_ssc;
 
-	// always @(posedge sysclk)
-	// if (reset_s) begin
-	//    reset_delay <= 0;
-	//    reset <= 1;
-	// end else begin
-	//    if (reset_delay < 4)
-	//       reset_delay <= reset_delay + 4'd1;
-	//    else
-	//       reset <= 0;
-	// end
+	assign int_b = ~(edge_counter == 1 || edge_counter == 2);
 
-	wire dma_en = ctrl[6:5] == 2'b10;
+	wire dma_en = (ctrl[6:5] == 2'b10) && zp_written;
+
+	wire PCLKEDGE = clock_div == 1 && pclk_toggle;
+	assign mclk0 = clk_toggle;
+	assign mclk1 = ~clk_toggle;
+
+	always @(posedge clk_sys) begin
+		if (reset) begin
+			edge_counter <= 2'd3;
+			dli_latch <= 0;
+			old_dli <= 0;
+			ready <= 1;
+			clock_div <= 0;
+			clk_toggle <= 0;
+			pclk_toggle <= 0;
+			pclk0 <= 0;
+			pclk1 <= 0;
+			pclk0_latch <= 0;
+			pclk1_latch <= 0;
+			old_ssc <= 0;
+		end else begin
+			clk_toggle <= ~clk_toggle;
+			old_dli <= DLI_en;
+
+			if (~old_dli & DLI_en) begin
+				dli_latch <= 1;
+				edge_counter <= 0;
+			end
+
+			if (pclk0)
+				cpu_ticks <= cpu_ticks + 1'd1;
+			if (mclk0) begin
+				if (halt_en) halted_ticks <= halted_ticks + 1'd1;
+				if (drive_AB) driven_ticks <= driven_ticks + 1'd1;
+			end
+			if (lrc) begin
+				cpu_ticks <= 0;
+				halted_ticks <= 0;
+				driven_ticks <= 0;
+			end
+
+
+			if (pclk1) begin
+				if (~&edge_counter && dli_latch)
+					edge_counter <= edge_counter + 1'd1;
+				if (edge_counter == 3)
+					dli_latch <= 0;
+			end
+
+			if (deassert_ready)
+				ready <= 1'b0;
+			else if (lrc)
+				ready <= 1'b1;
+
+			pclk0 <= 0;
+			pclk1 <= 0;
+
+			pclk0_latch <= pclk0;
+			pclk1_latch <= pclk1;
+
+			if (mclk1) begin
+				if (~(halt_en & halt_unlock)) begin
+					old_ssc <= sel_slow_clock;
+					if (clock_div)
+						clock_div <= clock_div - 1'd1;
+					else begin
+						pclk_toggle <= ~pclk_toggle;
+						pclk1 <= ~pclk_toggle;
+						pclk0 <= pclk_toggle;
+						clock_div <= sel_slow_clock ? 3'd2 : 2'd1;
+					end
+					if (old_ssc != sel_slow_clock) begin
+						// In theory this should only happen 1 cycle after pclk1
+						// when the addresses change.
+						clock_div <= sel_slow_clock ? 3'd1 : 2'd0;
+					end
+				end else begin
+					pclk0 <= 1;
+				end
+			end
+		end
+	end
+
 
 	line_ram line_ram_inst(
-		.SYSCLK(sysclk),
-		.RESET(reset),
-		.PLAYBACK(UV_out),
-		// Databus inputs
-		.INPUT_ADDR(read_DB_in),
-		.PALETTE(read_DB_in[7:5]),
-		.PIXELS(read_DB_in),
-		.WM(read_DB_in[7]),
-		// Write enable for databus inputs
-		.PALETTE_W(palette_w),
-		.INPUT_W(input_w),
-		.PIXELS_W(pixels_w),
-		.WM_W(wm_w),
-		// Memory mapped registers
-		.COLOR_MAP(color_map),
-		.READ_MODE(ctrl[1:0]),
-		.KANGAROO_MODE(ctrl[2]),
+		.mclk0         (mclk0),
+		.mclk1         (mclk1),
+		.border        (border),
+		.clk_sys       (clk_sys),
+		.latch_byte    (latch_byte),
+		.clear_hpos    (clear_hpos),
+		.RESET         (reset),
+		.PLAYBACK      (UV_out),
+		.hpos          (hpos),
+		.PALETTE       (palette),
+		.PIXELS        (read_DB_in),
+		.WM            (wm),
+		.COLOR_MAP     (color_map),
+		.RM            (ctrl[1:0]),
+		.KANGAROO_MODE (ctrl[2]),
 		.BORDER_CONTROL(ctrl[3]),
-		.DMA_EN(dma_en),
-		.COLOR_KILL(ctrl[7]),
-		// Control signals from timing_ctrl
-		.LRAM_SWAP(lram_swap),
-		.LRAM_OUT_COL(vga_col)
+		.DMA_EN        (dma_en),
+		.COLOR_KILL    (ctrl[7]),
+		.lrc           (lrc)
 	);
 
-	timing_ctrl timing_ctrl_inst(
-		// Enabled only if men is asserted and display mode is 10
-		.enable(enable & dma_en),
-		// Clocking
-		.sysclk(sysclk),
-		.reset(reset),
-		.pclk_2(pclk_2),
-		.pclk_0(pclk_0),
-		.tia_clk(tia_clk),
-		.pokey_clock(pokey_clock),
-		// Signals needed to slow pclk_0
-		.sel_slow_clock(sel_slow_clock),
-		// Outputs to 6502
-		.halt_b(halt_b),
-		.int_b(int_b),
-		.ready(ready),
-		// Signals to/from dma_ctrl
-		.zp_dma_start(zp_dma_start),
-		.dp_dma_start(dp_dma_start),
-		.zp_dma_done(zp_dma_done),
-		.dp_dma_done(dp_dma_done),
-		.dp_dma_done_dli(dp_dma_done_dli),
-		.dp_dma_kill(dp_dma_kill),
-		.last_line(last_line),
-		// Signals to/from line_ram
-		.lram_swap(lram_swap),
-		// Signals to/from VGA
-		.vga_row(vga_row),
-		.vga_col(vga_col),
-		// Signals from memory map
-		.deassert_ready(deassert_ready),
-		.zp_written(zp_written),
-		.hblank(hblank)
-	);
+	// timing_ctrl timing_ctrl_inst(
+	// 	.mclk0           (mclk0),
+	// 	.mclk1           (mclk1),
+	// 	.maria_en        (maria_en & dma_en),
+	// 	.halt_unlock     (halt_unlock),
+	// 	.clk_sys         (clk_sys),
+	// 	.reset           (reset),
+	// 	.tia_clk         (tia_clk),
+	// 	.pokey_clock     (pokey_clock),
+	// 	.sel_slow_clock  (sel_slow_clock),
+	// 	.pclk0           (pclk0),
+	// 	.pclk1           (pclk1),
+	// 	.halt_b          (halt_b),
+	// 	.int_b           (int_b),
+	// 	.ready           (ready),
+	// 	.zp_dma_start    (zp_dma_start),
+	// 	.dp_dma_start    (dp_dma_start),
+	// 	.zp_dma_done     (zp_dma_done),
+	// 	.dp_dma_done     (dp_dma_done),
+	// 	.dp_dma_done_dli (dp_dma_done_dli),
+	// 	.dp_dma_kill     (dp_dma_kill),
+	// 	.last_line       (last_line),
+	// 	.lram_swap       (lram_swap),
+	// 	.row             (row),
+	// 	.col             (col),
+	// 	.deassert_ready  (deassert_ready),
+	// 	.zp_written      (zp_written),
+	// 	.hblank          (hblank)
+	// );
 
 	memory_map memory_map_inst(
-		.maria_en(enable),
-		.tia_en(tia_en),
-		.AB(AB_in),
-		.DB_in(write_DB_in),
-		.DB_out(DB_out),
-		//.drive_DB(drive_DB),
-		.halt_b(halt_b),
-		.we_b(RW),
-		//.tia_b(tia_b),
-		//.p6532_b(p6532_b),
-		//.ram0_b(ram0_b),
-		//.ram1_b(ram1_b),
-		//.riot_ram_b(riot_ram_b),
-		.cs(CS),
-		.bios_en(bios_en),
-		.drive_AB(drive_AB),
-		.ctrl(ctrl),
-		.color_map(color_map),
-		.status_read({vblank, 7'b0}),
-		.char_base(char_base),
-		.ZP(ZP),
-		.sel_slow_clock(sel_slow_clock),
-		.deassert_ready(deassert_ready),
-		.zp_written(zp_written),
-		.sysclock(sysclk),
-		.reset_b(~reset),
-		.pclk_2(pclk_2),
-		.pclk_0(pclk_0)
+		.mclk0          (mclk0),
+		.mclk1          (mclk1),
+		.maria_en       (maria_en),
+		.tia_en         (tia_en),
+		.AB             (AB_in),
+		.DB_in          (write_DB_in),
+		.DB_out         (DB_out),
+		.halt_b         (halt_b),
+		.we_b           (RW),
+		.cs             (CS),
+		.bios_en        (bios_en),
+		.drive_AB       (drive_AB),
+		.ctrl           (ctrl),
+		.color_map      (color_map),
+		.status_read    ({vblank, 7'b0}),
+		.char_base      (char_base),
+		.ZP             (ZP),
+		.sel_slow_clock (sel_slow_clock),
+		.deassert_ready (deassert_ready),
+		.zp_written     (zp_written),
+		.sysclock       (clk_sys),
+		.reset_b        (~reset),
+		.ctrl_written   (ctrl_written),
+		.pclk0          (pclk2)
 	);
 
 	dma_ctrl dma_ctrl_inst (
-		.AddrB(AB_out),
-		.drive_AB(drive_AB),
-		.DataB(read_DB_in),
-		.ZP(ZP),
-		.palette_w(palette_w),
-		.input_w(input_w),
-		.pixels_w(pixels_w),
-		.wm_w(wm_w),
-		.zp_dma_start(zp_dma_start),
-		.dp_dma_start(dp_dma_start),
-		.dp_dma_kill(dp_dma_kill),
-		.zp_dma_done(zp_dma_done),
-		.dp_dma_done(dp_dma_done),
-		.dp_dma_done_dli(dp_dma_done_dli),
-		.sysclk(sysclk),
-		.reset(reset),
-		.last_line(last_line),
-		.character_width(ctrl[4]),
-		.char_base(char_base)
+		.clk_sys         (clk_sys),
+		.reset           (reset),
+		.mclk0           (mclk0),
+		.mclk1           (mclk1),
+		.PCLKEDGE        (PCLKEDGE),
+		.vblank          (vblank),
+		.vbe             (vbe),
+		.hbs             (hbs),
+		.lrc             (lrc),
+		.dma_en          (dma_en),
+		.pclk1           (pclk1),
+		.AddrB           (AB_out),
+		.drive_AB        (drive_AB),
+		.latch_byte      (latch_byte),
+		.DataB           (read_DB_in),
+		.clear_hpos      (clear_hpos),
+		.HALT            (halt_en),
+		.HPOS            (hpos),
+		.DLI             (DLI_en),
+		.WM              (wm),
+		.PAL             (palette),
+		.ZP              (ZP),
+		.character_width (ctrl[4]),
+		.char_base       (char_base)
 	);
 
-	uv_to_vga240 vga_out(
-		.clk    (sysclk),
+	video_sync sync (
+		.mclk0  (mclk0),
+		.mclk1  (mclk1),
+		.clk    (clk_sys),
 		.reset  (reset),
 		.uv_in  (UV_out),
-		.row    (vga_row),
-		.col    (vga_col),
+		.row    (row),
+		.col    (col),
+		.PAL    (PAL),
 		.RED    (red),
 		.GREEN  (green),
 		.BLUE   (blue),
 		.HSync  (hsync),
 		.VSync  (vsync),
 		.hblank (hblank),
-		.vblank (vblank)
+		.vblank (vblank),
+		.border (border),
+		.hide_border (hide_border),
+		.lrc    (lrc),
+		.prst   (prst),
+		.vbe    (vbe),
+		.hbs    (hbs)
 	);
 
 endmodule

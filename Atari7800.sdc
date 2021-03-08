@@ -3,4 +3,4 @@
 # derive_clocks -period 30
 # derive_clock_uncertainty
 
-set_false_path -from   {*emu|reset}
+#set_false_path -from   {*emu|reset}

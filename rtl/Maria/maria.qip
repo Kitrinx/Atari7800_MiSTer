@@ -1,0 +1,6 @@
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) dma_ctrl.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) Atari7800.vh]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) maria.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) memory_map.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) video_sync.sv]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) line_ram.sv]

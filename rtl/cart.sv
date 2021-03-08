@@ -5,7 +5,9 @@
 // Covers the bank switching, ram, and audio hardware from carts
 module cart
 (
-	input  logic        maria_clock, pokey_clock, clock,
+	input  logic        clk_sys,
+	input  logic        pclk0,
+	input  logic        pclk1,
 	input  logic [15:0] address_in,
 	input  logic [7:0]  din,
 	input  logic [7:0]  rom_din,
@@ -17,27 +19,29 @@ module cart
 	input  logic        reset,
 
 	output logic [7:0]  dout,
-	output logic [15:0]  pokey_audio,
-	output logic [17:0] rom_address
+	output logic [15:0] pokey_audio,
+	output logic [18:0] rom_address
 );
 
 logic [3:0] bank_reg;
-reg [7:0] ram_dout;
+logic [7:0] ram_dout;
 
 logic rom_cs, ram_cs, pokey_cs;
 logic [2:0] hardware_map[8];
-logic [3:0] bank_map[8];
-logic [2:0] bank_type; // 00 = Supergame, 01 = Activision, 02 = none
+logic [4:0] bank_map[8];
+logic [2:0] bank_type; // 00 = Supergame, 01 = Activision, 02 = none 03 = absolute
 logic [31:0] address_offset;
 logic [2:0] cart_cs_reg, cart_cs_reg_m;
 logic [3:0] bank_mask;
+logic [13:0] ram_mask;
 
-always_ff @(negedge clock) begin
+always_ff @(posedge clk_sys) if (pclk1) begin
 	hardware_map <= '{3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0};
 	bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0};
-	bank_type <= 3'b000;
+	bank_type <= 3'd0;
 	address_offset <= 32'd0;
 	bank_mask <= 4'b1111;
+	ram_mask <= '1;
 
 	// Banking mode selector
 	if (cart_flags[8]) begin                                   // Activision
@@ -49,14 +53,14 @@ always_ff @(negedge clock) begin
 	end else if (cart_flags[9]) begin                           // Absolute
 		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
 		bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd2, 4'd2, 4'd3, 4'd3};
-		bank_map[2] <= {3'b000, |bank_reg[1:0]};
-		bank_map[3] <= {3'b000, |bank_reg[1:0]};
-		bank_type <= 3'd0;
+		bank_map[2] <= {3'b000, bank_reg[1]};
+		bank_map[3] <= {3'b000, bank_reg[1]};
+		bank_type <= 3'd3;
 	end else if (cart_flags[3] || cart_size > 32'h20000) begin  // SuperGame 9 bank
 		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
-		bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd8, 4'd8};
-		bank_map[4] <= bank_reg[3:0] + 1'b1;
-		bank_map[5] <= bank_reg[3:0] + 1'b1;
+		bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd1, 4'd1, 4'd8, 4'd8};
+		bank_map[4] <= bank_reg[3:0] + 1'd1;
+		bank_map[5] <= bank_reg[3:0] + 1'd1;
 		bank_type <= 3'd0;
 	end else if (cart_flags[1] || cart_size >= 32'h10000) begin // SuperGame
 		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
@@ -78,11 +82,6 @@ always_ff @(negedge clock) begin
 		bank_type <= 3'd2;
 	end
 
-	// 450 POKEY
-	// if (cart_flags[6]) begin // POKEY at $450
-	// 	hardware_map[0] <= 3'd2;
-	// end
-
 	// Alternative hardware at $4k selector
 	if (cart_flags[0]) begin // POKEY at $4k
 		hardware_map[2] <= 3'd2;
@@ -90,18 +89,21 @@ always_ff @(negedge clock) begin
 	end else if (cart_flags[2]) begin // Supergame RAM at $4k
 		hardware_map[2] <= 3'd3;
 		hardware_map[3] <= 3'd3;
-	end else if (cart_flags[5]) begin // Banked RAM at $4k
+	end else if (cart_flags[5]) begin // Supergame 8kb RAM at $6k
+		hardware_map[3] <= 3'd3;
+		hardware_map[4] <= 3'd3;
+		ram_mask[13] <= 0;
+	end else if (cart_flags[7]) begin // Mirror RAM at $4k // FIXME: Rescue at fractalis crazy mapping
 		hardware_map[2] <= 3'd3;
 		hardware_map[3] <= 3'd3;
-	end else if (cart_flags[7]) begin // Mirror RAM at $4k
-		hardware_map[2] <= 3'd3;
-		hardware_map[3] <= 3'd3;
-	end /*else if (cart_flags[4]) begin // Bank 6 at $4k
-		hardware_map[2] = 3'd4;
-		hardware_map[3] = 3'd4;
-		bank_map[2] = 4'd6;
-		bank_map[3] = 4'd6;
-	end*/
+		ram_mask[8] <= 0;
+		ram_mask[13:12] <= 2'b00;
+	end else if (cart_flags[4]) begin // Bank 6 at $4k
+		hardware_map[2] <= 3'd4;
+		hardware_map[3] <= 3'd4;
+		bank_map[2] <= 4'd6;
+		bank_map[3] <= 4'd6;
+	end
 end
 
 logic [2:0] address_index;
@@ -111,9 +113,11 @@ assign address_index = address_in[15:13];
 always_comb begin
 	pokey_cs = 0;
 	ram_cs = 0;
-	rom_address = 18'd0;
-	if (cart_flags[6] && address_in == 11'h450)
+	rom_address = 19'd0;
+	if ((cart_flags[6] && address_in[15:4] == 8'h45) && cart_cs)
 		pokey_cs = 1;
+	// else if ((cart_flags[0] && address_in[15:4] == 16'h400) && cart_cs)
+	// 	pokey_cs = 1;
 	else if (cart_cs) case (hardware_map[address_index])
 		3'd1: begin           // ROM Data
 			rom_address = {1'b0, address_in - address_offset[15:0]};
@@ -127,7 +131,9 @@ always_comb begin
 				3'd1: // Activision
 					rom_address = {1'b0, bank_map[address_index], address_in[12:0]};
 				3'd2: // No banking
-					rom_address = {2'b00, address_in - address_offset[15:0]};
+					rom_address = {3'b000, address_in - address_offset[15:0]};
+				3'd3: // Absolute
+					rom_address = {bank_map[address_index], address_in[13:0]};
 		endcase
 		end
 		//default: // High impedance
@@ -143,30 +149,28 @@ end
 //m_bank_mask = (size / 0x4000) - 1
 //m_base_rom = 0x10000 - size;
 
-always_ff @(posedge clock) begin
+always_ff @(posedge clk_sys) begin
 	if (reset) begin
 		bank_reg <= 4'd0;
-	end else if (~rw & cart_cs) begin
+	end else if (~rw & cart_cs & pclk0) begin
 		if (bank_type == 3'd0 && (hardware_map[address_index] == 3'd4)) //supergame bank
 			bank_reg <= din[3:0];
 		else if (bank_type == 3'd1 && (address_in[15:4]) == 12'hFF8) // activision bank
 			bank_reg <= address_in[3:0];
+		else if (bank_type == 3'd3 && address_in[15]) // Absolute
+			bank_reg <= din[1:0];
 	end
 end
 
 spram #(.addr_width(14)) cart_ram
 (
-	.clock(maria_clock),
-	.address(address_in[13:0]),
+	.clock(clk_sys),
+	.address(address_in[13:0] & ram_mask),
 	.data(din),
-	.wren(~rw),
+	.wren(~rw & ram_cs & pclk0),
 	.q(ram_dout),
-	.cs(ram_cs)
+	.cs(1)
 );
-
-always_ff @(posedge clock) if (cart_cs && ~dma_read) cart_cs_reg <= hardware_map[address_index];
-
-always_ff @(posedge maria_clock) if (cart_cs) cart_cs_reg_m <= hardware_map[address_index];
 
 //CS Type:
 //00 - high impedance
@@ -176,70 +180,58 @@ always_ff @(posedge maria_clock) if (cart_cs) cart_cs_reg_m <= hardware_map[addr
 //04 - Banked ROM
 always_comb begin
 	case(hardware_map[address_index])
-		3'd0: dout = 8'bZZZZZZZZ;   // High Impedance
-		3'd1: dout = rom_din;       // ROM Data
+		3'd0: dout = 'Z;            // High Impedance
+		3'd1, 3'd4: dout = rom_din;       // ROM Data
 		3'd2: dout = pokey4k_dout;  // POKEY
 		3'd3: dout = ram_dout;      // RAM Data
-		default: dout = 8'bZZZZZZZZ;
+		default: dout = 'Z;
 	endcase
 end
 
 logic pokey4k_dout;
-logic pokey4k_aud;
-logic pokey4k_audio;
 
-// POKEY pokey4k
-// (
-// 	.Din(din),
-// 	.Dout(pokey4k_dout),
-// 	.A(address_in[3:0]), //4 bits
-// 	.P(8'd0), //pot?
-// 	.phi2(pclk_2), //pclk_2
-// 	.rw(rw), //write low
-// 	.cs0Bar(~pokey_cs),
-// 	.aud(pokey4k_aud), //producing audio
-// 	.audio(pokey4k_audio)
-// 	.clk(clk100) //100mhz
-// );
 
 logic [3:0] ch0, ch1, ch2, ch3;
 logic [5:0] pokey_mux;
+logic [2:0] pokey_ce;
 
-always @(posedge maria_clock)
+always @(posedge clk_sys) begin
+	pokey_ce <= pokey_ce + 1'd1;
 	pokey_mux <= ch0 + ch1 + ch2 + ch3;
+end
 
-assign pokey_audio = {pokey_mux, 10'd0};
-// pokey the_penguin (
-// 	.CLK(pokey_clock),
-// 	.ENABLE_179(1),
-// 	.ADDR(address_in[3:0]),
-// 	.DATA_IN(din),
-// 	.WR_EN(~rw & pokey_cs),
-// 	.RESET_N(~reset),
-// 	.keyboard_scan_enable(),
-// 	.keyboard_scan(),
-// 	.keyboard_response(),
+assign pokey_audio = (cart_flags[0] || cart_flags[6]) ? {pokey_mux, 10'd0} : 16'd0;
+pokey the_penguin (
+	.CLK(clk_sys),
+	.ENABLE_179(!pokey_ce),
+	.ADDR(address_in[3:0]),
+	.DATA_IN(din),
+	.WR_EN(~rw & pokey_cs),
+	.RESET_N(~reset),
+	.keyboard_scan_enable(),
+	.keyboard_scan(),
+	.keyboard_response(),
 
-// 	.POT_IN(),
-// 	.SIO_IN1(),
-// 	.SIO_IN2(),
-// 	.SIO_IN3(),
-// 	.DATA_OUT(pokey4k_dout),
-// 	.CHANNEL_0_OUT(ch0),
-// 	.CHANNEL_1_OUT(ch1),
-// 	.CHANNEL_2_OUT(ch2),
-// 	.CHANNEL_3_OUT(ch3),
+	.POT_IN(),
+	.SIO_IN1(),
+	.SIO_IN2(),
+	.SIO_IN3(),
+	.DATA_OUT(pokey4k_dout),
+	.CHANNEL_0_OUT(ch0),
+	.CHANNEL_1_OUT(ch1),
+	.CHANNEL_2_OUT(ch2),
+	.CHANNEL_3_OUT(ch3),
 
-// 	.IRQ_N_OUT(),
-// 	.SIO_OUT1(),
-// 	.SIO_OUT2(),
-// 	.SIO_OUT3(),
-// 	.SIO_CLOCKIN_IN(),
-// 	.SIO_CLOCKIN_OUT(),
-// 	.SIO_CLOCKIN_OE(),
-// 	.SIO_CLOCKOUT(),
-// 	.POT_RESET()
-// );
+	.IRQ_N_OUT(),
+	.SIO_OUT1(),
+	.SIO_OUT2(),
+	.SIO_OUT3(),
+	.SIO_CLOCKIN_IN(),
+	.SIO_CLOCKIN_OUT(),
+	.SIO_CLOCKIN_OE(),
+	.SIO_CLOCKOUT(),
+	.POT_RESET()
+);
 
 endmodule: cart
 

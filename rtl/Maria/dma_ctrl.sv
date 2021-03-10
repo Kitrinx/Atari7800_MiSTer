@@ -98,15 +98,21 @@ logic hbs_latch;
 logic vbe_latch;
 logic width_ovr;
 logic shutting_down;
+logic [9:0] cycles_elapsed;
 
 always_ff @(posedge clk_sys) if (reset) begin
 	state <= DMA_WAIT_ZP;
 	substate <= 0;
 	hbs_latch <= 0;
+	cycles_elapsed <= 0;
 	vbe_latch <= 0;
 	width_ovr <= 0;
 	shutting_down <= 1;
 	latch_byte <= 0;
+	CHR_PTR <= 0;
+	DL_PTR <= 0;
+	PIX_PTR <= 0;
+	ZONE_PTR <= 0;
 	drive_AB <= 0;
 	wrote_one <= 0;
 	OFFSET <= 0;
@@ -118,10 +124,15 @@ always_ff @(posedge clk_sys) if (reset) begin
 	PAL <= 0;
 	clear_hpos <= 0;
 end else if (mclk0) begin
-	if (hbs)
+	cycles_elapsed <= cycles_elapsed + 1'd1;
+	if (hbs) begin
 		hbs_latch <= 1;
-	if (vbe)
+		cycles_elapsed <= 0;
+	end
+	if (vbe) begin
 		vbe_latch <= 1;
+		cycles_elapsed <= 0;
+	end
 	case (state)
 		// Wait for starting condition
 		DMA_WAIT_ZP: begin
@@ -166,22 +177,18 @@ end else if (mclk0) begin
 
 		DMA_START_ZP:begin
 			substate <= substate + 1'd1;
-			case (substate)
-				11: begin // Just burn cycles.
-					substate <= 0;
-					state <= DMA_ZONE_END_0;
-				end
-			endcase
+			if (cycles_elapsed + substate >= 15) begin
+				substate <= 0;
+				state <= DMA_ZONE_END_0;
+			end
 		end
 
 		DMA_START_DP:begin
 			substate <= substate + 1'd1;
-			case (substate)
-				11: begin // Just burn cycles.
-					substate <= 0;
-					state <= DMA_HEADER_0;
-				end
-			endcase
+			if (cycles_elapsed + substate >= 15) begin
+				substate <= 0;
+				state <= DMA_HEADER_0;
+			end
 		end
 
 		DMA_HOLEY_COOLDOWN:begin
@@ -219,7 +226,9 @@ end else if (mclk0) begin
 				1: begin
 					DL_PTR <= DL_PTR + 1'd1;
 					substate <= 0;
-					if (~|DataB) begin// End of line
+					// Maria apparently only checks 0x5F as a bit pattern
+					// for end-of-zone markers, not for 0.
+					if (~DataB[6] && ~|DataB[4:0]) begin// End of line
 						state <= OFFSET ? DMA_END : DMA_ZONE_END_0;
 						shutting_down <= 1;
 					end else if (~|DataB[4:0]) begin/// Long header

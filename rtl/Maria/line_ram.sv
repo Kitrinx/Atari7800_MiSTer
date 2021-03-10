@@ -44,9 +44,11 @@ logic [4:0]               playback_cell;
 logic [8:0]               playback_ix;
 logic [7:0]               lram_ix;
 logic [7:0]               offset;
-logic [7:0]               border_color;
 
 //assign playback_ix = (LRAM_OUT_COL > 9'd133) ? LRAM_OUT_COL - 9'd134 : 9'd0;
+
+logic [5:0] pb_map_index[8];
+assign pb_map_index = '{5'd0, 5'd3, 5'd6, 5'd9, 5'd12, 5'd15, 5'd18, 5'd21};
 
 always @(posedge clk_sys) begin
 	if (mclk0) begin
@@ -55,12 +57,10 @@ always @(posedge clk_sys) begin
 		else
 			playback_ix <= 0;
 	end
-	if (~border)
-		border_color <= ~BORDER_CONTROL ? 8'd0 : COLOR_MAP[0];
 	if (playback_color == 2'b0 || ~DMA_EN || border) begin
-		PLAYBACK <= border ? border_color : COLOR_MAP[0];
+		PLAYBACK <= (border & ~BORDER_CONTROL) ? 8'd0 : COLOR_MAP[0];
 	end else begin
-		PLAYBACK <= COLOR_MAP[3 * playback_palette + playback_color] & (COLOR_KILL ? 8'b1110_0000 : 8'b1111_1111);
+		PLAYBACK <= COLOR_MAP[pb_map_index[playback_palette] + playback_color] & (COLOR_KILL ? 8'b1110_0000 : 8'b1111_1111);
 	end
 end
 
@@ -213,14 +213,14 @@ always_ff @(posedge clk_sys) begin
 				// These can all be written into the cells using
 				// the same format and read out differently.
 				offset <= offset + 3'd4;
-				if (|PIXELS[7:6])
-					lram_in[input_addr+0] <= {PALETTE, PIXELS[7:6]};
-				if (|PIXELS[5:4])
-					lram_in[input_addr+1] <= {PALETTE, PIXELS[5:4]};
-				if (|PIXELS[3:2])
-					lram_in[input_addr+2] <= {PALETTE, PIXELS[3:2]};
-				if (|PIXELS[1:0])
-					lram_in[input_addr+3] <= {PALETTE, PIXELS[1:0]};
+				if (|PIXELS[7:6] || KANGAROO_MODE)
+					lram_in[input_addr+8'd0] <= {PALETTE, PIXELS[7:6]};
+				if (|PIXELS[5:4] || KANGAROO_MODE)
+					lram_in[input_addr+8'd1] <= {PALETTE, PIXELS[5:4]};
+				if (|PIXELS[3:2] || KANGAROO_MODE)
+					lram_in[input_addr+8'd2] <= {PALETTE, PIXELS[3:2]};
+				if (|PIXELS[1:0] || KANGAROO_MODE)
+					lram_in[input_addr+8'd3] <= {PALETTE, PIXELS[1:0]};
 			end
 			1'b1: begin
 				// "When wm = 1, each byte specifies two cells within the lineram."
@@ -243,10 +243,10 @@ always_ff @(posedge clk_sys) begin
 				// transparency may not be correct in 320B mode here
 				// since the color bits are different than 160B and 320C.
 				offset <= offset + 2'd2;
-				if (|PIXELS[7:6])
-					lram_in[input_addr+0] <= {PALETTE[2], PIXELS[3:2], PIXELS[7:6]};
-				if (|PIXELS[5:4])
-					lram_in[input_addr+1] <= {PALETTE[2], PIXELS[1:0], PIXELS[5:4]};
+				if (|PIXELS[7:6] || KANGAROO_MODE)
+					lram_in[input_addr+8'd0] <= {PALETTE[2], PIXELS[3:2], PIXELS[7:6]};
+				if (|PIXELS[5:4] || KANGAROO_MODE)
+					lram_in[input_addr+8'd1] <= {PALETTE[2], PIXELS[1:0], PIXELS[5:4]};
 			end
 			endcase
 		end

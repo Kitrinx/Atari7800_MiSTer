@@ -78,9 +78,9 @@ module video_sync (
 	output logic       hblank, vblank,
 	output logic       border,
 	output logic       lrc,
-	output logic       prst,
-	output logic       vbe, // vblank_end
-	output logic       hbs  // hblank start delayed by 1
+	output logic       prst, // no clue, but it's there
+	output logic       vbe,  // vblank_end
+	output logic       hbs   // hblank start
 );
 
 logic visible;
@@ -119,10 +119,8 @@ assign prst       = col == RESET_PRST;
 always_ff @(posedge clk) if (reset) begin
 	row <= 0;
 	col <= 0;
-	//hbs <= 0;
 end else if (mclk0) begin
 	col <= col + 10'd1;
-	//hbs <= col == HBLANK_START;
 
 	if (col >= MAX_COLUMN) begin
 		col <= 0;
@@ -132,8 +130,6 @@ end else if (mclk0) begin
 			row <= 0;
 	end
 end
-
-
 
 
 // Chrominance-Luminance palettes (represented as rgb)

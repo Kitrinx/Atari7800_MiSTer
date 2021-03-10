@@ -3,6 +3,7 @@ set_global_assignment -name QIP_FILE rtl/tia/tia.qip
 set_global_assignment -name QIP_FILE rtl/RIOT/riot.qip
 set_global_assignment -name QIP_FILE rtl/Pokey/Pokey.qip
 set_global_assignment -name QIP_FILE rtl/Maria/maria.qip
+set_global_assignment -name QIP_FILE rtl/jt51/jt51.qip
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tia.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cart.sv
 set_global_assignment -name VHDL_FILE rtl/dpram.vhd

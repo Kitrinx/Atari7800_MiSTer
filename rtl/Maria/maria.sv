@@ -84,7 +84,7 @@ module maria(
 	// {DM1, DM0}: DMA Control. 0: Test A. 1: Test B.
 	//                          2: Normal DMA. 3: No DMA.
 	// CW: Character Width (For indirect mode). 0=>2bytes. 1=>1byte.
-	// BC: Border Control: 0=>Background Color. 1=>Black Border.
+	// BC: Border Control: 0=>Black Border. 1=>Background Color.
 	// KM: Kangaroo Mode: 0=>Transparency, 1=>No transparency
 	// {RM1, RM0}: Read mode.
 	logic [7:0]       ctrl;
@@ -92,30 +92,8 @@ module maria(
 	logic [7:0]       char_base;
 	logic [15:0]      ZP;
 
-	logic [9:0]       row, col;
-
-	//// Signals from memory_map to timing_ctrl
-	logic             deassert_ready, zp_written;
-
-	// Write enables for internal Display List registers
-	logic             palette_w, input_w, pixels_w, wm_w;
-
-	//// Control signals between timing_ctrl and dma_ctrl
-	logic             zp_dma_start, dp_dma_start;
-	logic             zp_dma_done, dp_dma_done;
-	// When dp_dma_done is asserted, use this signal to specify
-	// whether timing_ctrl needs to raise a display list interrupt
-	logic             dp_dma_done_dli;
-	// If a DMA is taking too long (too many objects,) kill it
-	logic             dp_dma_kill;
-	// Next-line ZP DMA not needed at end of DP DMA
-	logic             last_line;
-
-	//// Control signals between timing_ctrl and line_ram
-	logic             lram_swap;
-	
+	logic deassert_ready;	
 	logic [3:0] reset_delay;
-
 	logic mclk1;
 	logic border;
 	logic prst;
@@ -126,23 +104,23 @@ module maria(
 	logic wm;
 	logic [7:0] hpos;
 	logic clear_hpos;
-	logic pclk0_latch;
-	logic pclk1_latch;
 	logic halt_en;
 	logic DLI_en;
 	logic dli_latch;
 	logic [1:0] edge_counter;
 	logic clk_toggle;
 	logic old_dli;
-	logic [2:0]        clock_div, clock_p1_div;
+	logic [2:0] clock_div, clock_p1_div;
 	logic latch_byte;
 	logic ctrl_written;
 	logic pclk_toggle;
 	logic old_ssc;
 
+	// Normally this would be one cpu cycle, but T65 appears to
+	// need this low for two cpu cycles to take action.
 	assign int_b = ~(edge_counter == 1 || edge_counter == 2);
 
-	wire dma_en = (ctrl[6:5] == 2'b10) && zp_written;
+	wire dma_en = (ctrl[6:5] == 2'b10);
 
 	wire PCLKEDGE = clock_div == 1 && pclk_toggle;
 	assign mclk0 = clk_toggle;
@@ -159,8 +137,6 @@ module maria(
 			pclk_toggle <= 0;
 			pclk0 <= 0;
 			pclk1 <= 0;
-			pclk0_latch <= 0;
-			pclk1_latch <= 0;
 			old_ssc <= 0;
 		end else begin
 			clk_toggle <= ~clk_toggle;
@@ -199,9 +175,6 @@ module maria(
 			pclk0 <= 0;
 			pclk1 <= 0;
 
-			pclk0_latch <= pclk0;
-			pclk1_latch <= pclk1;
-
 			if (mclk1) begin
 				if (~(halt_en & halt_unlock)) begin
 					old_ssc <= sel_slow_clock;
@@ -225,7 +198,6 @@ module maria(
 		end
 	end
 
-
 	line_ram line_ram_inst(
 		.mclk0         (mclk0),
 		.mclk1         (mclk1),
@@ -248,36 +220,6 @@ module maria(
 		.lrc           (lrc)
 	);
 
-	// timing_ctrl timing_ctrl_inst(
-	// 	.mclk0           (mclk0),
-	// 	.mclk1           (mclk1),
-	// 	.maria_en        (maria_en & dma_en),
-	// 	.halt_unlock     (halt_unlock),
-	// 	.clk_sys         (clk_sys),
-	// 	.reset           (reset),
-	// 	.tia_clk         (tia_clk),
-	// 	.pokey_clock     (pokey_clock),
-	// 	.sel_slow_clock  (sel_slow_clock),
-	// 	.pclk0           (pclk0),
-	// 	.pclk1           (pclk1),
-	// 	.halt_b          (halt_b),
-	// 	.int_b           (int_b),
-	// 	.ready           (ready),
-	// 	.zp_dma_start    (zp_dma_start),
-	// 	.dp_dma_start    (dp_dma_start),
-	// 	.zp_dma_done     (zp_dma_done),
-	// 	.dp_dma_done     (dp_dma_done),
-	// 	.dp_dma_done_dli (dp_dma_done_dli),
-	// 	.dp_dma_kill     (dp_dma_kill),
-	// 	.last_line       (last_line),
-	// 	.lram_swap       (lram_swap),
-	// 	.row             (row),
-	// 	.col             (col),
-	// 	.deassert_ready  (deassert_ready),
-	// 	.zp_written      (zp_written),
-	// 	.hblank          (hblank)
-	// );
-
 	memory_map memory_map_inst(
 		.mclk0          (mclk0),
 		.mclk1          (mclk1),
@@ -296,12 +238,11 @@ module maria(
 		.status_read    ({vblank, 7'b0}),
 		.char_base      (char_base),
 		.ZP             (ZP),
+		.pal            (PAL),
 		.sel_slow_clock (sel_slow_clock),
 		.deassert_ready (deassert_ready),
-		.zp_written     (zp_written),
 		.sysclock       (clk_sys),
 		.reset_b        (~reset),
-		.ctrl_written   (ctrl_written),
 		.pclk0          (pclk2)
 	);
 
@@ -338,8 +279,6 @@ module maria(
 		.clk    (clk_sys),
 		.reset  (reset),
 		.uv_in  (UV_out),
-		.row    (row),
-		.col    (col),
 		.PAL    (PAL),
 		.RED    (red),
 		.GREEN  (green),

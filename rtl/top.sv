@@ -3,40 +3,53 @@
 `define OLD_TIA
 
 module Atari7800(
-input  logic       clk_sys, clk_tia, reset,
-output logic [7:0] RED, GREEN, BLUE,
-output logic       HSync, VSync, HBlank, VBlank,
-output logic       ce_pix,
-input  logic       PAL,
+input  logic        clk_sys,
+input  logic        clk_tia,
+input  logic        reset,
+output logic  [7:0] RED,
+output logic  [7:0] GREEN,
+output logic  [7:0] BLUE,
+output logic        HSync,
+output logic        VSync,
+output logic        HBlank,
+output logic        VBlank,
+output logic        ce_pix,
+input  logic        PAL,
+input  logic        hsc_en,
 
-output logic [15:0] AUDIO,
+output logic [15:0] AUDIO_R,
+output logic [15:0] AUDIO_L,
 input logic         show_border,
 input logic         bypass_bios,
 input logic         tia_mode,
 
 output logic        cart_sel, bios_sel,
 input  logic        cart_region,
+input  logic [7:0]  cart_xm,
 input  logic [7:0]  cart_out, bios_out,
 output logic [15:0] AB,
 output logic [18:0] cart_addr_out,
-input  logic [9:0]  cart_flags,
+input  logic [15:0] cart_flags,
+input  logic  [7:0] cart_save,
 input  logic [31:0] cart_size,
 output logic        RW,
 output logic        pclk0,
 
-input logic         loading,
+input  logic        loading,
 
-output logic [7:0] ld,
+output logic  [7:0] ld,
 
 // Tia inputs
-input  logic [3:0] idump,
-input  logic [1:0] ilatch,
+input  logic  [3:0] idump,
+input  logic  [1:0] ilatch,
 
-output logic tia_en,
+output logic        tia_en,
 
 // Riot inputs
-input logic [7:0] PAin, PBin,
-output logic [7:0] PAout, PBout
+input  logic  [7:0] PAin,
+input  logic  [7:0] PBin,
+output logic  [7:0] PAout,
+output logic  [7:0] PBout
 );
 
 	assign ld[5:1] = '0;
@@ -94,7 +107,7 @@ output logic [7:0] PAout, PBout
 
 	`chipselect       CS_maria_buf, CS_core_buf, CS_buf, CS;
 
-	logic [15:0] pokey_audio;
+	logic [15:0] pokey_audio, ym_audio_r, ym_audio_l;
 	logic mclk0;
 
 	wire dma_en = maria_drive_AB;
@@ -147,59 +160,26 @@ output logic [7:0] PAout, PBout
 
 	always_ff @(posedge clk_sys) clear_addr <= clear_addr + loading;
 
-	// dpram_dc #(.widthad_a(11)) ram0
-	// (
-	// 	.clock_a(clk_sys),
-	// 	.address_a(AB[10:0]),
-	// 	.data_a(write_DB),
-	// 	.wren_a(~RW & ram0_cs & pclk0),
-	// 	.q_a(ram0_DB_out),
-	// 	//.byteena_a(~loading),
-
-	// 	.clock_b(clk_sys),
-	// 	.address_b(clear_addr),
-	// 	.wren_b(loading)
-	// );
 
 	spram #(.addr_width(11), .mem_name("RAM0")) ram0
 	(
-		.clock(clk_sys),
-		.address(loading ? clear_addr : AB[10:0]),
-		.data(loading ? 8'd0 : write_DB),
-		.wren((~RW & ram0_cs & pclk0) || loading),
-		.q(ram0_DB_out)
+		.clock   (clk_sys),
+		.address (loading ? clear_addr : AB[10:0]),
+		.data    (loading ? 8'hFF : write_DB),
+		.wren    ((~RW & ram0_cs & pclk0) || loading),
+		.q       (ram0_DB_out)
 	);
 
 	spram #(.addr_width(11), .mem_name("RAM1")) ram1
 	(
-		.clock(clk_sys),
-		.address(loading ? clear_addr : AB[10:0]),
-		.data(loading ? 8'd0 : write_DB),
-		.wren((~RW & ram1_cs & pclk0) || loading),
-		.q(ram1_DB_out)
+		.clock   (clk_sys),
+		.address (loading ? clear_addr : AB[10:0]),
+		.data    (loading ? 8'hFF : write_DB),
+		.wren    ((~RW & ram1_cs & pclk0) || loading),
+		.q       (ram1_DB_out)
 	);
 
-
-	// dpram_dc #(.widthad_a(11)) ram1
-	// (
-	// 	.clock_a(clk_sys),
-	// 	.address_a(AB[10:0]),
-	// 	.data_a(write_DB),
-	// 	.wren_a(~RW & ram1_cs & pclk0),
-	// 	.q_a(ram1_DB_out),
-	// 	.byteena_a(~loading),
-
-	// 	.clock_b(clk_sys),
-	// 	.address_b(clear_addr),
-	// 	.wren_b(loading)
-	// );
-
-	// High score cart rom from $3000 to $3fff and ram from
-	// $1000 - $17FFF
-
-
 	// Clock
-	//assign pclk0 = ~pclk_0;
 	logic maria_vblank, maria_vsync, maria_hblank, maria_hsync;
 	logic [3:0] maria_red, maria_green, maria_blue;
 	logic pclk1;
@@ -378,46 +358,10 @@ output logic [7:0] PAout, PBout
 	};
 
 	wire [5:0] aud_index = audv0 + audv1;
-	assign AUDIO = audio_lut[aud_index] + pokey_audio;
+	assign AUDIO_R = audio_lut[aud_index] + pokey_audio + ym_audio_r;
+	assign AUDIO_L = audio_lut[aud_index] + pokey_audio + ym_audio_l;
 
 //RIOT
-// RIOT riot_inst
-// (
-// 	.A(AB[6:0]),         // Address bus input
-// 	.Din(write_DB),      // Data bus input
-// 	.Dout(riot_DB_out),  // Data bus output
-// 	.CS(riot_cs),        // Chip select input
-// 	.CS_n(~riot_cs),     // Active low chip select input
-// 	.R_W_n(RW),          // Active high read, active low write input
-// 	.RS_n(~riot_ram_cs), // Active low rom select input
-// 	.RES_n(~reset),      // Active low reset input
-// 	.IRQ_n(),            // Active low interrupt output
-// 	.CLK(pclk0),        // Clock input
-// 	.PAin(PAin),         // 8 bit port A input
-// 	.PAout(PAout),       // 8 bit port A output
-// 	.PBin(PBin),         // 8 bit port B input
-// 	.PBout(PBout)        // 8 bit port B output
-// );
-
-// M6532 #(.init_7800(1)) riot_inst_2
-// (
-// 	.clk(clk_sys), // PHI 2
-// 	.ce(pclk0),  // Clock enable
-// 	.res_n(~reset), // reset
-// 	.addr(AB[6:0]), // Address
-// 	.RW_n(RW), // 1 = read, 0 = write
-// 	.d_in(write_DB),
-// 	.d_out(riot_DB_out),
-// 	.RS_n(~riot_ram_cs), // RAM select
-// 	.IRQ_n(),
-// 	.CS1(riot_cs), // Chip select 1, 1 = selected
-// 	.CS2_n(~riot_cs),// Chip select 2, 0 = selected
-// 	.PA_in(PAin),
-// 	.PA_out(PAout),
-// 	.PB_in(PBin),
-// 	.PB_out(PBout)
-// );
-
 riot RIOT (
 	.clk          (clk_sys),
 	.reset        (reset),
@@ -438,8 +382,8 @@ riot RIOT (
 	.cs2n         (~riot_cs),
 	.irqn         ()
 );
-//6502
 
+// CPU
 assign RDY = maria_en ? maria_RDY : ((tia_en) ? tia_RDY : 1'b1);
 assign core_halt_b = (ctrl_writes == 2'd2) ? halt_b : 1'b1;
 assign CPU_NMI = ~m_int_b;
@@ -448,17 +392,17 @@ logic cpu_rwn;
 
 M6502C cpu_inst
 (
-	.pclk1(pclk1),
-	.clk_sys(clk_sys),
-	.reset(reset),
-	.AB(core_AB_out),
-	.DB_IN(read_DB),
-	.DB_OUT(core_DB_out),
-	.RD(cpu_rwn),
-	.IRQ(~IRQ_n),
-	.NMI(CPU_NMI),
-	.RDY(RDY),
-	.halt_b(core_halt_b)
+	.pclk1   (pclk1),
+	.clk_sys (clk_sys),
+	.reset   (reset),
+	.AB      (core_AB_out),
+	.DB_IN   (read_DB),
+	.DB_OUT  (core_DB_out),
+	.RD      (cpu_rwn),
+	.IRQ     (~IRQ_n),
+	.NMI     (CPU_NMI),
+	.RDY     (RDY),
+	.halt_b  (core_halt_b)
 );
 
 assign ld[6] = tia_en;
@@ -466,37 +410,42 @@ assign ld[7] = maria_en;
 
 ctrl_reg ctrl
 (
-	.clk(clk_sys),
-	.pclk0(pclk0),
-	.d_in(write_DB[3:0]),
-	.cs(tia_cs),
-	.latch_b(RW | lock_ctrl),
-	.rst(reset),
-	.lock_out(lock_ctrl),
-	.bypass_bios(bypass_bios),
-	.maria_en_out(maria_en),
-	.bios_en_out(bios_en_b),
-	.tia_en_out(tia_en),
-	.writes(ctrl_writes),
-	.tia_mode(tia_mode)
+	.clk          (clk_sys),
+	.pclk0        (pclk0),
+	.d_in         (write_DB[3:0]),
+	.cs           (tia_cs),
+	.latch_b      (RW | lock_ctrl),
+	.rst          (reset),
+	.lock_out     (lock_ctrl),
+	.bypass_bios  (bypass_bios),
+	.maria_en_out (maria_en),
+	.bios_en_out  (bios_en_b),
+	.tia_en_out   (tia_en),
+	.writes       (ctrl_writes),
+	.tia_mode     (tia_mode)
 );
 
 cart cart
 (
-	.clk_sys(clk_sys),
-	.pclk0(pclk0),
-	.pclk1(pclk1),
-	.dma_read(dma_en),
-	.reset(reset),
-	.address_in(AB[15:0]),
-	.din(write_DB),
-	.rom_din(cart_out),
-	.cart_flags(cart_flags),
-	.cart_size(cart_size),
-	.cart_cs(cart_cs),
-	.rw(RW),
-	.dout(cart_DB_out),
+	.clk_sys    (clk_sys),
+	.pclk0      (pclk0),
+	.pclk1      (pclk1),
+	.dma_read   (dma_en),
+	.reset      (reset),
+	.address_in (AB[15:0]),
+	.din        (write_DB),
+	.rom_din    (cart_out),
+	.cart_flags (cart_flags),
+	.cart_size  (cart_size),
+	.cart_save  (cart_save),
+	.cart_cs    (cart_cs),
+	.cart_xm    (cart_xm),
+	.hsc_en     (hsc_en),
+	.rw         (RW),
+	.dout       (cart_DB_out),
 	.pokey_audio(pokey_audio),
+	.ym_audio_r (ym_audio_r),
+	.ym_audio_l (ym_audio_l),
 	.rom_address(cart_addr_out)
 );
 
@@ -517,16 +466,19 @@ module ctrl_reg
 );
 
 always_ff @(posedge clk) begin
+	reg wrote_once;
 	if (rst) begin
 		lock_out <= 0;
 		maria_en_out <= 0;
 		bios_en_out <= 0;
 		tia_en_out <= 0;
+		wrote_once <= 0;
 		writes <= 0;
-	end	else if (bypass_bios) begin
-		lock_out <= 1;
+	end	else if (bypass_bios && ~wrote_once) begin
+		lock_out <= tia_mode ? 1'd1 : 1'd0;
 		maria_en_out <= tia_mode ? 1'd0 : 1'd1;
 		bios_en_out <= 1;
+		wrote_once <= 1;
 		tia_en_out <= tia_mode ? 1'd1 : 1'd0;
 		writes <= 2'd2;
 	end else if (~latch_b && cs && pclk0) begin

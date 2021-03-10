@@ -213,29 +213,25 @@ pll pll
 );
 
 // 7.1590909 half
-// 14.3181818 = NTSC
+// 14318189 = NTSC
 // 14.187576 = PAL
+// Skip every 109 cycles?
+logic reset;
+always @(posedge clk_vid)
+	reset <= RESET | buttons[1] | status[0] | ioctl_download;
 
-wire reset = RESET | buttons[1] | status[0] | ioctl_download | initial_pause;
 
 wire cart_download = ioctl_download & (ioctl_index[5:0] == 6'd1);
 wire bios_download = ioctl_download & (ioctl_index[5:0] == 8'd0) && (ioctl_index[7:6] == 0);
-wire bios_pal_download = ioctl_download & (ioctl_index[5:0] == 8'd0) && (ioctl_index[7:6] == 1);
 
 reg old_cart_download;
-reg initial_pause = 1'b1;
-
-always @(posedge clk_sys) begin
-	old_cart_download <= cart_download;
-	if (old_cart_download & ~cart_download) initial_pause <= 1'b0;
-end
 
 ////////////////////////////  HPS I/O  //////////////////////////////////
 // Status Bit Map:
 // 0         1         2         3          4         5         6
 // 01234567890123456789012345678901 23456789012345678901234567890123
 // 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
-// X       XXXXXXXXXX
+// X       XXXXXXXXXXXX
 
 `include "build_id.v"
 parameter CONF_STR = {
@@ -245,6 +241,7 @@ parameter CONF_STR = {
 	"O9B,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"OE,Show Border,No,Yes;",
 	"OFG,Region,Auto,NTSC,PAL;",
+	"OIJ,High Score Cart,Auto,On,Off;",
 	"-;",
 	"OH,Bypass Bios,Yes,No;",
 	"-;",
@@ -315,7 +312,7 @@ wire VBlank;
 wire [7:0] ld;
 
 wire [15:0] bios_addr;
-reg [7:0] cart_data, bios_data, bios_data_pal;
+reg [7:0] cart_data, bios_data;
 wire cart_sel, bios_sel;
 reg [7:0] joy0_type, joy1_type, cart_region, cart_save;
 
@@ -323,9 +320,10 @@ logic [15:0] cart_flags;
 logic [39:0] cart_header;
 logic [31:0] hcart_size, cart_size;
 logic [18:0] cart_addr;
+logic [7:0] cart_xm;
 
 logic cart_is_7800;
-wire region_select = ~|status[16:15] ? cart_region : (status[16] ? 1'b1 : 1'b0);
+wire region_select = ~|status[16:15] ? cart_region[0] : (status[16] ? 1'b1 : 1'b0);
 
 Atari7800 main
 (
@@ -347,21 +345,25 @@ Atari7800 main
 	.PAL          (region_select),
 	.tia_mode     (~cart_is_7800),
 	.bypass_bios  (~status[17]),
+	.hsc_en       (~|status[19:18] && (|cart_save || cart_xm[0]) ? 1'b1 : status[18]),
 
 	// Audio
-	.AUDIO        (AUDIO_R), // 16 bit
+	.AUDIO_R        (AUDIO_R), // 16 bit
+	.AUDIO_L        (AUDIO_L), // 16 bit
 
 	// Cart Interface
 	.cart_sel     (cart_sel),
 	.cart_out     (cart_data),
 	.cart_size    (cart_is_7800 ? hcart_size : cart_size),
 	.cart_addr_out(cart_addr),
-	.cart_flags   (cart_is_7800 ? cart_flags[9:0] : 10'd0),
+	.cart_flags   (cart_is_7800 ? cart_flags[15:0] : 16'd0),
 	.cart_region  (cart_is_7800 ? cart_region[0] : 1'b0),
+	.cart_save    (cart_save),
+	.cart_xm      (cart_xm),
 
 	// BIOS
 	.bios_sel     (bios_sel),
-	.bios_out     (0 ? bios_data_pal : bios_data),
+	.bios_out     (bios_data),
 	.AB           (bios_addr), // Address
 	.RW           (), // inverted write
 
@@ -380,13 +382,19 @@ Atari7800 main
 	.PBout        (PBout)  // Peanut butter
 );
 
-assign AUDIO_L = AUDIO_R;
-
 
 ////////////////////////////  MEMORY  ///////////////////////////////////
 
 
 //wire cart_is_7800 = ~|ioctl_index[7:6];
+initial begin
+	cart_header = "ATARI";
+	hcart_size = 32'h00008000;
+	cart_flags = 0;
+	cart_region = 0;
+	cart_save = 0;
+	cart_xm = 0;
+end
 
 always_ff @(posedge clk_sys) begin
 	logic old_cart_download;
@@ -404,7 +412,7 @@ always_ff @(posedge clk_sys) begin
 			'd03: cart_header[23:16] <= ioctl_dout;
 			'd04: cart_header[15:8] <= ioctl_dout;
 			'd05: cart_header[7:0] <= ioctl_dout;
-			'd49: hcart_size[31:24] <= ioctl_dout; //This appears to be useless.
+			'd49: hcart_size[31:24] <= ioctl_dout;
 			'd50: hcart_size[23:16] <= ioctl_dout;
 			'd51: hcart_size[15:8] <= ioctl_dout;
 			'd52: hcart_size[7:0] <= ioctl_dout;
@@ -413,7 +421,8 @@ always_ff @(posedge clk_sys) begin
 			// 'd55: joy0_type <= ioctl_dout;   // 0=none, 1=joystick, 2=lightgun
 			// 'd56: joy1_type <= ioctl_dout;
 			'd57: cart_region <= ioctl_dout; // 0=ntsc, 1=pal
-			//'d58: cart_save <= ioctl_dout;   // 0=none, 1=high score cart, 2=savekey
+			'd58: cart_save <= ioctl_dout;   // 0=none, 1=high score cart, 2=savekey
+			'd63: cart_xm <= ioctl_dout; // 1 = Has XM
 		endcase
 	end
 end
@@ -421,53 +430,50 @@ end
 logic [17:0] cart_write_addr, fixed_addr;
 assign cart_write_addr = (ioctl_addr >= 8'd128) && cart_is_7800 ? (ioctl_addr[17:0] - 8'd128) : ioctl_addr[17:0];
 
-spram #(.addr_width(18), .mem_name("Cart")) cart // FIXME: this needs to be 19 bits!
+spram #(
+	.addr_width(18),
+	.mem_name("Cart"),
+	.mem_init_file("mem0.mif")
+) cart // FIXME: this needs to be 19 bits!
 (
-	.address(cart_download ? cart_write_addr : cart_addr),
-	.clock(clk_sys),
-	.data(ioctl_dout),
-	.wren(ioctl_wr & cart_download),
-	.q(cart_data)
+	.address (cart_download ? cart_write_addr : cart_addr),
+	.clock   (clk_sys),
+	.data    (ioctl_dout),
+	.wren    (ioctl_wr & cart_download),
+	.q       (cart_data)
 );
 
-// FIXME: Make bios loadable
+// FIXME: Make bios loadable, expand to optional size for pal and prototype bioses
 spram #(.addr_width(12), .mem_name("BIOS")) bios
 (
-	.address(bios_download ? ioctl_addr : bios_addr[11:0]),
-	.clock(clk_sys),
-	.data(ioctl_dout),
-	.wren(ioctl_wr & bios_download),
-	.q(bios_data)
+	.address (bios_download ? ioctl_addr : bios_addr[11:0]),
+	.clock   (clk_sys),
+	.data    (ioctl_dout),
+	.wren    (ioctl_wr & bios_download),
+	.q       (bios_data)
 );
-
-// spram #(.addr_width(14), .mem_name("BIOSPAL")) bios_pal
-// (
-// 	.address(bios_pal_download ? ioctl_addr : bios_addr[13:0]),
-// 	.clock(clk_sys),
-// 	.data(ioctl_dout),
-// 	.wren(ioctl_wr & bios_pal_download),
-// 	.q(bios_data_pal)
-// );
-// dpram_dc #(.widthad_a(12)) bios
-// (
-// 	.address_a(bios_addr[11:0]),
-// 	.clock_a(clk_sys),
-// 	.byteena_a(~bios_download),
-// 	.q_a(bios_data),
-
-// 	.address_b(ioctl_addr),
-// 	.clock_b(clk_sys),
-// 	.data_b(ioctl_dout),
-// 	.wren_b(ioctl_wr & bios_download),
-// 	.byteena_b(1'b1)
-// );
 
 //////////////////////////////  IO  /////////////////////////////////////
 
+// https://atariage.com/forums/topic/23003-light-gun-pinout/
+// Pin 1 - Trigger
+// Pin 6 - Light Sensor
+// Pin 7 - +5V
+// Pin 8 - Ground
 
+// Controller
+// Pin 1 - Up
+// Pin 2 - Down
+// Pin 3 - Left
+// Pin 4 - Right
+// Pin 5 - B input paddle (7800 right button)
+// Pin 6 - Fire (7800 both buttons) // 2600 legacy
+// Pin 7 - +5v
+// Pin 8 - Gnd
+// Pin 9 - A input paddle (7800 left button)
 
-wire joya_b2 = ~PBout[2] & ~tia_en;
-wire joyb_b2 = ~PBout[4] & ~tia_en;
+wire joya_b2 = ~PBout[2] && ~tia_en;
+wire joyb_b2 = ~PBout[4] && ~tia_en;
 
 logic [15:0] joya, joyb;
 assign joya = status[7] ? joy1 : joy0;
@@ -491,8 +497,8 @@ assign PBin[0] = (~joya[8] & ~joyb[8]);    // Start/Reset
 assign PAin[7:4] = {~joya[0], ~joya[1], ~joya[2], ~joya[3]}; // P1: R L D U or PA PB 1 1
 assign PAin[3:0] = {~joyb[0], ~joyb[1], ~joyb[2], ~joyb[3]}; // P2: R L D U or PA PB 1 1
 
-assign ilatch[0] = ~joya[4]; // P1 Fire
-assign ilatch[1] = ~joyb[4]; // P2 Fire
+assign ilatch[0] = /*joya_b2 ? 1'b1 :*/ ~(joya[4] || joya[5]); // P1 Fire
+assign ilatch[1] = /*joyb_b2 ? 1'b1 :*/ ~(joyb[4] || joyb[5]); // P2 Fire
 
 wire pada_0 = joya_b2 ? joya[4] : joya[9];
 wire pada_1 = joya_b2 ? joya[5] : joya[10];

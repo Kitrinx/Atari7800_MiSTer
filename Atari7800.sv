@@ -176,15 +176,15 @@ assign USER_OUT  = '1;
 
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 
-assign AUDIO_S   = 1;
+assign AUDIO_S   = 0;
 assign AUDIO_MIX = 0;
 
 assign LED_USER  = ld[7];
 assign LED_DISK  = ld[6];
 assign LED_POWER = 0;
 
-assign VIDEO_ARX = status[8] ? 8'd16 : 12'd2969;
-assign VIDEO_ARY = status[8] ? 8'd9  : 12'd2628;
+assign VIDEO_ARX = status[8] ? 8'd16 : 12'd1535;
+assign VIDEO_ARY = status[8] ? 8'd9  : 12'd1294;
 
 assign VGA_SCALER = 0;
 
@@ -200,6 +200,7 @@ assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 wire clock_locked;
 wire clk_vid;
 wire clk_sys;
+wire clk_tia;
 
 pll pll
 (
@@ -207,35 +208,42 @@ pll pll
 	.rst(0),
 	.outclk_0(clk_sys),
 	.outclk_1(clk_vid),
+	.outclk_2(clk_tia),
 	.locked(clock_locked)
 );
 
 // 7.1590909 half
-// 14.3181818 = NTSC
+// 14318189 = NTSC
 // 14.187576 = PAL
+// Skip every 109 cycles?
+logic reset;
+always @(posedge clk_vid)
+	reset <= RESET | buttons[1] | status[0] | ioctl_download;
 
-wire reset = RESET | buttons[1] | status[0] | ioctl_download | initial_pause;
 
-wire cart_download = ioctl_download & (ioctl_index != 8'd0);
-wire bios_download = ioctl_download & (ioctl_index == 8'd0);
-
+wire cart_download = ioctl_download & (ioctl_index[5:0] == 6'd1);
+wire bios_download = ioctl_download & (ioctl_index[5:0] == 8'd0) && (ioctl_index[7:6] == 0);
 
 reg old_cart_download;
-reg initial_pause = 1'b1;
-
-always @(posedge clk_sys) begin
-	old_cart_download <= cart_download;
-	if (old_cart_download & ~cart_download) initial_pause <= 1'b0;
-end
 
 ////////////////////////////  HPS I/O  //////////////////////////////////
+// Status Bit Map:
+// 0         1         2         3          4         5         6
+// 01234567890123456789012345678901 23456789012345678901234567890123
+// 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
+// X       XXXXXXXXXXXX
 
 `include "build_id.v"
 parameter CONF_STR = {
 	"ATARI7800;;",
-	"F1,A78A26;",
-	"O8,Aspect ratio,4:3,16:9;",
+	"F1S,A78A26;",
+	"O8,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"O9B,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
+	"OE,Show Border,No,Yes;",
+	"OFG,Region,Auto,NTSC,PAL;",
+	"OIJ,High Score Cart,Auto,On,Off;",
+	"-;",
+	"OH,Bypass Bios,Yes,No;",
 	"-;",
 	"O7,Swap Joysticks,No,Yes;",
 	"OC,Difficulty Right,Low,High;",
@@ -245,6 +253,7 @@ parameter CONF_STR = {
 	"J1,Fire1,Fire2,Pause,Select,Start,PU,PD;",
 	"V,v",`BUILD_DATE
 };
+
 
 wire  [1:0] buttons;
 wire [31:0] status;
@@ -260,6 +269,8 @@ wire [7:0]  ioctl_index;
 wire [21:0] gamma_bus;
 
 wire [15:0] joy0,joy1;
+
+
 
 hps_io #(.STRLEN(($size(CONF_STR)>>3))) hps_io
 (
@@ -288,14 +299,37 @@ hps_io #(.STRLEN(($size(CONF_STR)>>3))) hps_io
 );
 
 ////////////////////////////  SYSTEM  ///////////////////////////////////
+logic tia_en;
+logic [3:0] idump;
+
+logic [1:0] ilatch;
+logic [7:0] PAin, PBin, PAout, PBout;
+wire [7:0] R,G,B;
+wire HSync;
+wire VSync;
+wire HBlank;
+wire VBlank;
+wire [7:0] ld;
+
+wire [15:0] bios_addr;
+reg [7:0] cart_data, bios_data;
+wire cart_sel, bios_sel;
+reg [7:0] joy0_type, joy1_type, cart_region, cart_save;
+
+logic [15:0] cart_flags;
+logic [39:0] cart_header;
+logic [31:0] hcart_size, cart_size;
+logic [18:0] cart_addr;
+logic [7:0] cart_xm;
+
+logic cart_is_7800;
+wire region_select = ~|status[16:15] ? cart_region[0] : (status[16] ? 1'b1 : 1'b0);
 
 Atari7800 main
 (
-	.sysclk_7_143 (clk_sys),
-	.clock_25     (clk_vid),
+	.clk_sys      (clk_sys),
+	.clk_tia      (clk_tia),
 	.reset        (reset),
-	//.pclk_0       (pclk_0),
-	.pclk_2       (pclk_0),
 	.loading      (ioctl_download),
 
 	// Video
@@ -307,17 +341,25 @@ Atari7800 main
 	.HBlank       (HBlank),
 	.VBlank       (VBlank),
 	.ce_pix       (),
+	.show_border  (status[14]),
+	.PAL          (region_select),
+	.tia_mode     (~cart_is_7800),
+	.bypass_bios  (~status[17]),
+	.hsc_en       (~|status[19:18] && (|cart_save || cart_xm[0]) ? 1'b1 : status[18]),
 
 	// Audio
-	.AUDIO        (AUDIO_R), // 16 bit
+	.AUDIO_R        (AUDIO_R), // 16 bit
+	.AUDIO_L        (AUDIO_L), // 16 bit
 
 	// Cart Interface
 	.cart_sel     (cart_sel),
 	.cart_out     (cart_data),
-	.cart_size    (cart_size),
+	.cart_size    (cart_is_7800 ? hcart_size : cart_size),
 	.cart_addr_out(cart_addr),
-	.cart_flags   (cart_flags[9:0]),
-	.cart_region  (cart_region[0]),
+	.cart_flags   (cart_is_7800 ? cart_flags[15:0] : 16'd0),
+	.cart_region  (cart_is_7800 ? cart_region[0] : 1'b0),
+	.cart_save    (cart_save),
+	.cart_xm      (cart_xm),
 
 	// BIOS
 	.bios_sel     (bios_sel),
@@ -340,29 +382,24 @@ Atari7800 main
 	.PBout        (PBout)  // Peanut butter
 );
 
-wire [7:0] ld;
-assign AUDIO_L = AUDIO_R;
-
 
 ////////////////////////////  MEMORY  ///////////////////////////////////
 
-wire [16:0] bios_addr;
-reg [7:0] cart_data, bios_data;
-wire cart_sel, bios_sel;
-wire pclk_0;
-reg [7:0] joy0_type, joy1_type, cart_region, cart_save;
 
-logic [15:0] cart_flags;
-logic [39:0] cart_header;
-logic [31:0] hcart_size, cart_size;
-logic [17:0] cart_addr;
-
-wire cart_is_7800 = (cart_header == "ATARI");
 //wire cart_is_7800 = ~|ioctl_index[7:6];
+initial begin
+	cart_header = "ATARI";
+	hcart_size = 32'h00008000;
+	cart_flags = 0;
+	cart_region = 0;
+	cart_save = 0;
+	cart_xm = 0;
+end
 
 always_ff @(posedge clk_sys) begin
 	logic old_cart_download;
 	logic [24:0] old_addr;
+	cart_is_7800 <= (cart_header == "ATARI");
 
 	old_cart_download <= cart_download;
 	if (old_cart_download & ~cart_download)
@@ -375,16 +412,17 @@ always_ff @(posedge clk_sys) begin
 			'd03: cart_header[23:16] <= ioctl_dout;
 			'd04: cart_header[15:8] <= ioctl_dout;
 			'd05: cart_header[7:0] <= ioctl_dout;
-			// 'd49: hcart_size[31:24] <= ioctl_dout; //This appears to be useless.
-			// 'd50: hcart_size[23:16] <= ioctl_dout;
-			// 'd51: hcart_size[15:8] <= ioctl_dout;
-			// 'd52: hcart_size[7:0] <= ioctl_dout;
+			'd49: hcart_size[31:24] <= ioctl_dout;
+			'd50: hcart_size[23:16] <= ioctl_dout;
+			'd51: hcart_size[15:8] <= ioctl_dout;
+			'd52: hcart_size[7:0] <= ioctl_dout;
 			'd53: cart_flags[15:8] <= ioctl_dout;
 			'd54: cart_flags[7:0] <= ioctl_dout;
 			// 'd55: joy0_type <= ioctl_dout;   // 0=none, 1=joystick, 2=lightgun
 			// 'd56: joy1_type <= ioctl_dout;
 			'd57: cart_region <= ioctl_dout; // 0=ntsc, 1=pal
-			//'d58: cart_save <= ioctl_dout;   // 0=none, 1=high score cart, 2=savekey
+			'd58: cart_save <= ioctl_dout;   // 0=none, 1=high score cart, 2=savekey
+			'd63: cart_xm <= ioctl_dout; // 1 = Has XM
 		endcase
 	end
 end
@@ -392,44 +430,50 @@ end
 logic [17:0] cart_write_addr, fixed_addr;
 assign cart_write_addr = (ioctl_addr >= 8'd128) && cart_is_7800 ? (ioctl_addr[17:0] - 8'd128) : ioctl_addr[17:0];
 
-dpram_dc #(.widthad_a(18)) cart
+spram #(
+	.addr_width(18),
+	.mem_name("Cart"),
+	.mem_init_file("mem0.mif")
+) cart // FIXME: this needs to be 19 bits!
 (
-	.address_a(cart_addr),
-	.clock_a(clk_sys),
-	.byteena_a(~cart_download),
-	.q_a(cart_data),
-
-	.address_b(cart_write_addr),
-	.clock_b(clk_sys),
-	.data_b(ioctl_dout),
-	.wren_b(ioctl_wr & cart_download),
-	.byteena_b(1'b1)
+	.address (cart_download ? cart_write_addr : cart_addr),
+	.clock   (clk_sys),
+	.data    (ioctl_dout),
+	.wren    (ioctl_wr & cart_download),
+	.q       (cart_data)
 );
 
-dpram_dc #(.widthad_a(12)) bios
+// FIXME: Make bios loadable, expand to optional size for pal and prototype bioses
+spram #(.addr_width(12), .mem_name("BIOS")) bios
 (
-	.address_a(bios_addr[11:0]),
-	.clock_a(clk_sys),
-	.byteena_a(bios_sel & ~bios_download),
-	.q_a(bios_data),
-
-	.address_b(ioctl_addr),
-	.clock_b(clk_sys),
-	.data_b(ioctl_dout),
-	.wren_b(ioctl_wr & bios_download),
-	.byteena_b(1'b1)
+	.address (bios_download ? ioctl_addr : bios_addr[11:0]),
+	.clock   (clk_sys),
+	.data    (ioctl_dout),
+	.wren    (ioctl_wr & bios_download),
+	.q       (bios_data)
 );
 
 //////////////////////////////  IO  /////////////////////////////////////
 
-logic tia_en;
-logic [3:0] idump;
+// https://atariage.com/forums/topic/23003-light-gun-pinout/
+// Pin 1 - Trigger
+// Pin 6 - Light Sensor
+// Pin 7 - +5V
+// Pin 8 - Ground
 
-logic [1:0] ilatch;
-logic [7:0] PAin, PBin, PAout, PBout;
+// Controller
+// Pin 1 - Up
+// Pin 2 - Down
+// Pin 3 - Left
+// Pin 4 - Right
+// Pin 5 - B input paddle (7800 right button)
+// Pin 6 - Fire (7800 both buttons) // 2600 legacy
+// Pin 7 - +5v
+// Pin 8 - Gnd
+// Pin 9 - A input paddle (7800 left button)
 
-wire joya_b2 = ~PBout[2] & ~tia_en;
-wire joyb_b2 = ~PBout[4] & ~tia_en;
+wire joya_b2 = ~PBout[2] && ~tia_en;
+wire joyb_b2 = ~PBout[4] && ~tia_en;
 
 logic [15:0] joya, joyb;
 assign joya = status[7] ? joy1 : joy0;
@@ -453,8 +497,8 @@ assign PBin[0] = (~joya[8] & ~joyb[8]);    // Start/Reset
 assign PAin[7:4] = {~joya[0], ~joya[1], ~joya[2], ~joya[3]}; // P1: R L D U or PA PB 1 1
 assign PAin[3:0] = {~joyb[0], ~joyb[1], ~joyb[2], ~joyb[3]}; // P2: R L D U or PA PB 1 1
 
-assign ilatch[0] = ~joya[4]; // P1 Fire
-assign ilatch[1] = ~joyb[4]; // P2 Fire
+assign ilatch[0] = /*joya_b2 ? 1'b1 :*/ ~(joya[4] || joya[5]); // P1 Fire
+assign ilatch[1] = /*joyb_b2 ? 1'b1 :*/ ~(joyb[4] || joyb[5]); // P2 Fire
 
 wire pada_0 = joya_b2 ? joya[4] : joya[9];
 wire pada_1 = joya_b2 ? joya[5] : joya[10];
@@ -468,11 +512,7 @@ assign idump = {padb_0, padb_1, pada_0, pada_1}; // // P2 F1, P2 F2, P1 F1, P1 F
 
 ////////////////////////////  VIDEO  ////////////////////////////////////
 
-wire [3:0] R,G,B;
-wire HSync;
-wire VSync;
-wire HBlank;
-wire VBlank;
+
 
 
 assign VGA_F1 = 1'b0;
@@ -483,7 +523,32 @@ wire [2:0] scale = status[11:9];
 wire [2:0] sl = scale ? scale - 1'd1 : 3'd0;
 wire       scandoubler = (scale || forced_scandoubler);
 
-wire ce_pix = clk_sys;
+//wire ce_pix = clk_sys;
+reg ce_pix;
+
+always @(posedge CLK_VIDEO) begin : pix_div
+	reg [1:0] div;
+	div <= div + 1'd1;
+	ce_pix <= !div;
+end
+
+
+// always @(posedge CLK_VIDEO) begin
+// 	en216p <= ((HDMI_WIDTH == 1920) && (HDMI_HEIGHT == 1080) && !forced_scandoubler && !scale);
+// 	voff <= (vcopt < 6) ? {vcopt,1'b0} : ({vcopt,1'b0} - 5'd24);
+// end
+
+// wire vga_de;
+// video_freak video_freak
+// (
+// 	.*,
+// 	.VGA_DE_IN(vga_de),
+// 	.ARX((!ar) ? (hide_overscan ? 12'd64 : 12'd128) : (ar - 1'd1)),
+// 	.ARY((!ar) ? (hide_overscan ? 12'd49 : 12'd105) : 12'd0),
+// 	.CROP_SIZE((en216p & vcrop_en) ? 10'd216 : 10'd0),
+// 	.CROP_OFF(voff),
+// 	.SCALE(status[40:39])
+// );
 
 video_mixer video_mixer
 (
@@ -493,9 +558,9 @@ video_mixer video_mixer
 //	.scanlines(0),
 //	.mono(0),
 
-	.R({R,R}),
-	.G({G,G}),
-	.B({B,B})
+	.R(R),
+	.G(G),
+	.B(B)
 );
 
 endmodule

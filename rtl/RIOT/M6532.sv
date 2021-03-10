@@ -26,11 +26,12 @@ reg [7:0] riot_ram[128];
 reg [7:0] out_a, out_b, data;
 reg [7:0] dir_a, dir_b;
 reg [7:0] interrupt;
-reg signed [8:0] timer;
+reg [7:0] timer;
 
 reg [1:0] time_incr;
 reg [1:0] irq_en;
 reg edge_detect;
+reg timer_reverse;
 
 integer cycle_count;
 
@@ -92,9 +93,10 @@ always_ff @(posedge clk) if (~res_n) begin
 		riot_ram <= '{128{8'h00}};
 
 	{out_a, out_b, dir_a, dir_b, interrupt, irq_en, edge_detect} <= '0;
-	time_incr <= 2'b11; // Increment resets to 1024
-	timer <= -9'd256;   // Timer resets to -256 (0)
+	time_incr <= 2'b10; // Increment resets to 64
+	timer <= 8'hFF;   // Timer resets to FF
 	cycle_count <= 0;
+	timer_reverse <= 1;
 end else if (ce) begin : riot_stuff
 	integer cycle_counter;
 	reg old_pa7;
@@ -104,11 +106,15 @@ end else if (ce) begin : riot_stuff
 		if (cycle_count >= full_incr) begin
 			cycle_count <= 0;
 			timer <= timer - 8'd1;
-			if (timer == 0)
+			if (timer == 0) begin
 				interrupt[7] <= 1;
+				if (~timer_reverse)
+					timer <= 8'hFF;
+				time_incr <= 0;
+				timer_reverse <= 1;
+			end
 		end
-	end else if (timer > -256)
-		timer <= timer - 8'd1;
+	end
 
 	out_a <= (out_a & dir_a) | (PA_in & ~dir_a);
 	out_b <= (out_b & dir_b) | (PB_in & ~dir_b);
@@ -129,10 +135,13 @@ end else if (ce) begin : riot_stuff
 		end else begin // Timer & Interrupts
 			if (~RW_n) begin
 				if (addr[4])begin
+					if (|addr[1:0])
+						cycle_count <= 1;
 					time_incr <= addr[1:0];
-					timer <= {1'b0, d_in};
+					timer <= d_in - 1'd1;
 					irq_en[1] <= addr[3];
 					interrupt[7] <=0;
+					timer_reverse <= 0;
 				end else begin
 					irq_en[0] <= addr[1];
 					edge_detect <= addr[0];

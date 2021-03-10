@@ -1,0 +1,49 @@
+C:/Users/ehenciak/projects/fpga_games/a2600_mb/source/a2600/tia/update/tia_clocking_and_reset_crst_latch.vhd {1 {vcom -work a2600 -2002 -explicit C:/Users/ehenciak/projects/fpga_games/a2600_mb/source/a2600/tia/update/tia_clocking_and_reset_crst_latch.vhd
+Model Technology ModelSim PE vcom 10.2c Compiler 2013.07 Jul 18 2013
+-- Loading package STANDARD
+-- Loading package TEXTIO
+-- Loading package std_logic_1164
+-- Compiling entity tia_clocking_and_reset_crst_latch
+-- Compiling architecture struct of tia_clocking_and_reset_crst_latch
+
+} {} {}} C:/Users/ehenciak/projects/fpga_games/a2600_mb/source/a2600/tia/update/sim_comps/tia_sim_comps_pkg.vhd {1 {vcom -work a2600_sim -2002 -explicit C:/Users/ehenciak/projects/fpga_games/a2600_mb/source/a2600/tia/update/sim_comps/tia_sim_comps_pkg.vhd
+Model Technology ModelSim PE vcom 10.2c Compiler 2013.07 Jul 18 2013
+-- Loading package STANDARD
+-- Loading package TEXTIO
+-- Loading package std_logic_1164
+-- Compiling package tia_sim_comps
+
+} {} {}} C:/Users/ehenciak/projects/fpga_games/a2600_mb/source/a2600/tia/update/tia_clocking_and_reset.vhd {1 {vcom -work a2600 -2002 -explicit C:/Users/ehenciak/projects/fpga_games/a2600_mb/source/a2600/tia/update/tia_clocking_and_reset.vhd
+Model Technology ModelSim PE vcom 10.2c Compiler 2013.07 Jul 18 2013
+-- Loading package STANDARD
+-- Loading package TEXTIO
+-- Loading package std_logic_1164
+-- Loading package tia_pkg
+-- Loading package tia_sim_comps
+-- Compiling entity tia_clocking_and_reset
+-- Compiling architecture struct of tia_clocking_and_reset
+
+} {} {}} C:/Users/ehenciak/projects/fpga_games/a2600_mb/source/a2600/tia/update/tia_pkg.vhd {1 {vcom -work a2600 -2002 -explicit C:/Users/ehenciak/projects/fpga_games/a2600_mb/source/a2600/tia/update/tia_pkg.vhd
+Model Technology ModelSim PE vcom 10.2c Compiler 2013.07 Jul 18 2013
+-- Loading package STANDARD
+-- Loading package TEXTIO
+-- Loading package std_logic_1164
+-- Compiling package tia_pkg
+
+} {} {}} C:/Users/ehenciak/projects/fpga_games/a2600_mb/source/a2600/tia/update/sim_comps/tia_struct_cclk.vhd {1 {vcom -work a2600_sim -2002 -explicit C:/Users/ehenciak/projects/fpga_games/a2600_mb/source/a2600/tia/update/sim_comps/tia_struct_cclk.vhd
+Model Technology ModelSim PE vcom 10.2c Compiler 2013.07 Jul 18 2013
+-- Loading package STANDARD
+-- Loading package TEXTIO
+-- Loading package std_logic_1164
+-- Compiling entity tia_struct_cclk
+-- Compiling architecture struct of tia_struct_cclk
+
+} {} {}} C:/Users/ehenciak/projects/fpga_games/a2600_mb/source/a2600/tia/update/sim_comps/tia_cclk_sr_flop.vhd {1 {vcom -work a2600_sim -2002 -explicit C:/Users/ehenciak/projects/fpga_games/a2600_mb/source/a2600/tia/update/sim_comps/tia_cclk_sr_flop.vhd
+Model Technology ModelSim PE vcom 10.2c Compiler 2013.07 Jul 18 2013
+-- Loading package STANDARD
+-- Loading package TEXTIO
+-- Loading package std_logic_1164
+-- Compiling entity tia_cclk_sr_flop
+-- Compiling architecture gate of tia_cclk_sr_flop
+
+} {} {}}

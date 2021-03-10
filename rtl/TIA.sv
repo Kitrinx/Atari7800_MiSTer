@@ -1,4 +1,4 @@
-// Princess TIAbeanie
+// Princess TIA
 // Copyright Jamie Dickson, 2019 - 2020
 // Based on Stella Programmer's Guide and TIA schematics, and verified with Stella Emulator
 
@@ -48,7 +48,9 @@ typedef enum bit [5:0] {
 	RESMP1  = 6'h29,  // Write: reset missle 1 to player 1 (D1)
 	HMOVE   = 6'h2a,  // Write: apply horizontal motion (strobe)
 	HMCLR   = 6'h2b,  // Write: clear horizontal motion registers (strobe)
-	CXCLR   = 6'h2c   // Write: clear collision latches (strobe)
+	CXCLR   = 6'h2c,  // Write: clear collision latches (strobe)
+	GRP0O   = 6'h3E,  // Not a real register, used for GPR0 storage
+	GRP1O   = 6'h3F   // Not a real register, used for GPR1 storage
 } write_registers;
 
 typedef enum bit [3:0] {
@@ -68,337 +70,28 @@ typedef enum bit [3:0] {
 	INPT5   = 4'hd   // Read P2 joystick trigger: D7
 } read_registers;
 
-/////////////////////////////////////////////////////////////////////////////////////////
-module lfsr6_gen (
-	input clk,
-	input ce,
-	input reset,
-	output reg [5:0] lfsr
-);
-
-// Linear feedback shift register used by almost all components of TIA as a poor-man's
-// counter.
-
-always @(posedge clk) begin
-	if (ce) begin
-		if (reset || &lfsr)
-			lfsr <= 0;
-		else
-			lfsr <= {~((lfsr[1] & ~lfsr[0]) | ~(lfsr[1] | ~lfsr[0])), lfsr[5:1]};
-	end
-end
-
-endmodule
-
-/////////////////////////////////////////////////////////////////////////////////////////
-
-module playfield
-(
-	input clk,
-	input reset,
-	input HP2, // Horizontal clock phase 2
-	input hblank,
-	input reflect, // Control playfield, 1 makes right half mirror image
-	input cnt,   // center signal, high means right half
-	input [19:0] pfc, // Combined playfield registers
-	output pf
-);
-
-reg [4:0] pf_index;
-
-// Outputs in order PF0 4..7, PF1 7:0, PF2 0:7
-wire [4:0] index_lut[20] = '{
-	5'd00, 5'd01, 5'd02, 5'd03,                             // PF0
-	5'd11, 5'd10, 5'd09, 5'd08, 5'd07, 5'd06, 5'd05, 5'd04, // PF1 in reverse
-	5'd12, 5'd13, 5'd14, 5'd15, 5'd16, 5'd17, 5'd18, 5'd19  // PF2
-};
-
-assign pf = hblank ? 0 : pfc[index_lut[pf_index]];
-
-// ((cnt & ~mirror) | rhb)
-// ~(~cnt | ~mirror)
-
-always @(posedge clk) if (reset) begin
-	pf_index <= 0;
-end else begin
-	// The first half of the screen should draw from left to right in a strange order:
-	// PF0[7:4], PF1[0:7], PF2[7:0] Note that PF1 is drawn backwards.
-	// PF0     PF1         PF2
-	// 4567 <- 76543210 <- 01234567
-	if (HP2) begin
-		if (~hblank) begin
-			if (reflect & cnt) begin
-				if (pf_index > 0)
-					pf_index <= pf_index - 5'd1;
-			end else begin
-				if (pf_index < 19)
-					pf_index <= pf_index + 5'd1;
-				else if (~reflect)
-					pf_index <= 0;
-			end
-		end else begin
-			pf_index <= 0;
-		end
-	end
-end
-
-endmodule
-
-/////////////////////////////////////////////////////////////////////////////////////////
-
-module player_o
-(
-	input clk,
-	input motck,
-	input cc, // Color Clock (original oscillator frequency)
-	input enable,
-	input resp,
-	input reset,
-	input hmove,
-	input hmclr,
-	input signed [3:0] hmp,
-	input [7:0] grp,
-	input refp, // Player reflect
-	input [2:0] size,
-	output p
-);
-
-
-
-reg [5:0] lfsr;
-reg start;
-
-reg PP0, PP1; // Player clocks
-reg [1:0] player_div;
-reg [2:0] scan_div;
-reg fstob;
-
-wire ce = cc & enable;
-
-always_ff @(posedge clk) begin
-	{PP0, PP1} <= 0;
-	if (ce) begin
-		player_div <= player_div + 2'd1;
-		scan_div <= scan_div + 3'd1;
-		if (player_div == 3)
-			PP0 <= 1;
-		if (player_div <= 1)
-			PP1 <= 1;
-		if (scan_div >= 2)
-			scan_div <= 0;
-	end
-
-	if (PP1) begin
-		lfsr <= {~(~(lfsr[1] | lfsr[0]) | (~lfsr[0] & lfsr[1])), lfsr[5:1]};
-		if  ((lfsr == 6'b101101) ||
-			((lfsr == 6'b111000) && ((size == 3'b001) || (size == 3'b011))) ||
-			((lfsr == 6'b101111) && ((size == 3'b011) || (size == 3'b010) || (size == 3'b110))) ||
-			((lfsr == 6'b111001) && ((size == 3'b100) || (size == 3'b110)))) begin
-			start <= 1;
-			if (lfsr == 6'b101101)
-				fstob <= 1;
-			else
-				fstob <= 0;
-		end else begin
-			start <= 0;
-		end
-	end
-
-	if (resp) begin
-		lfsr <= 0;
-	end
-end
-
-
-endmodule
-
-/////////////////////////////////////////////////////////////////////////////////////////
-
-module missile_o
-(
-	input clk,
-	input ce,
-	input resm,
-	input resmp,
-	input hmove,
-	input hmclr,
-	input enam,
-	input signed [3:0] hmm,
-	input [1:0] size,
-	output m
-);
-
-endmodule
-
-/////////////////////////////////////////////////////////////////////////////////////////
-
-module ball_o
-(
-	input clk,
-	input cc,
-	input hmove,
-	input hmclr,
-	input signed [3:0] hmbl,
-	input enabl, // Enaball, get it ena..ball.. It was funnier in the 70s.
-	input resbl,
-	input hblank,
-	input [1:0] size,
-	output bl
-);
-
-// reg [5:0] lfsr_bl;
-
-// always @(posedge clk) if (resbl) begin
-// end else begin
-// 	lfsr_bl <= {~(~(lfsr_bl[1] | lfsr_bl[0]) | (lfsr_bl[0] & lfsr_bl[1])), lfsr_bl[5:1]};
-// end
-
-reg [5:0] lfsr;
-reg start, start_last;
-
-reg P0, P1; // Ball clocks
-reg [1:0] div;
-
-assign bl = (start && (size[1] | P1 | (div == 2 && size == 3))) || (start_last && size == 3);
-
-always_ff @(posedge clk) begin
-	{P0, P1} <= 0;
-
-	if (cc & enabl) begin
-		div <= div + 2'd1;
-		if (div == 3)
-			P0 <= 1;
-		if (div <= 1)
-			P1 <= 1;
-	end
-
-	if (P1) begin
-		lfsr <= {~(~(lfsr[1] | lfsr[0]) | (~lfsr[0] & lfsr[1])), lfsr[5:1]};
-		start_last <= start;
-		if (lfsr == 6'b111111) // Error
-			lfsr <= 0;
-
-		if (lfsr == 6'b101101) begin
-			lfsr <= 0;
-			start <= 1;
-		end else begin
-			start <= 0;
-		end
-	end
-
-	if (resbl) begin
-		lfsr <= 0;
-	end
-end
-
-endmodule
-
-/////////////////////////////////////////////////////////////////////////////////////////
-module audio_channel
-(
-	input clk,
-	input reset,
-	input ce,
-	input aud0,
-	input aud1,
-	input [3:0] volume,
-	input [4:0] freq,
-	input [3:0] audc,
-	output [3:0] audio
-);
-
-// The original hardware for the sound is quite convoluted using two shift registers and a
-// series of logic matching to manipulate the wave form. This recreation uses the condensed
-// logic found in the Stella emulator.
-
-reg [4:0] freq_div;
-reg [3:0] pulse_sr; // Pulse generator
-reg [4:0] noise_sr; // Noise generator
-reg noise;
-
-reg noise_en;
-
-wire pulse_en;
-reg pulse_hold;
-
-reg noise4_latch;
-
-assign audio = pulse_sr[0] ? volume : 4'h0;
-
-reg audio_clk;
-
-always_comb begin
-	case (audc[3:2])
-		0: pulse_en = ((pulse_sr[1] ? 1 : 0) ^ pulse_sr[0]) && (pulse_sr != 4'hA) && |audc[1:0];
-		1: pulse_en = ~pulse_sr[3];
-		2: pulse_en = ~noise4_latch;
-		3: pulse_en = ~(pulse_sr[1] || ~|pulse_sr[3:1]);
-	endcase
-end
-
-always_ff @(posedge clk) begin
-
-	// The audio ctrl register controls various dividers for the
-	// noise generator.
-	if (aud0) begin
-		freq_div <= freq_div + 1'd1;
-		audio_clk <= 0;
-
-		if (freq_div >= freq) begin
-			freq_div <= 0;
-			audio_clk <= 1;
-		end
-
-		if (~|audc[1:0]) begin
-			noise_en <= ((pulse_sr[0] ^ noise_sr[0]) ||
-				!(|noise_sr || (pulse_sr != 4'b1010)) || ~|audc[3:2]);
-		end else begin
-			noise_en <= (((noise_sr[2] ? 1 : 0) ^ noise_sr[0]) || ~|noise_sr);
-		end
-
-		if (audio_clk) begin
-			noise4_latch <= noise_sr[0];
-
-			case (audc[1:0])
-				0,1: pulse_hold <= 0;
-				2: pulse_hold <= (noise_sr[4:1] != 4'b0001);
-				3: pulse_hold <= ~noise_sr[0];
-			endcase
-		end
-	end
-
-	if (aud1 & audio_clk) begin
-		noise_sr <= {noise_en, noise_sr[4:1]};
-		if (~pulse_hold)
-			pulse_sr <= {pulse_en, ~pulse_sr[3:1]};
-	end
-
-	if (reset) begin
-		{freq_div, audio_clk, noise4_latch, noise_en, noise_sr, pulse_sr, pulse_hold} <= '0;
-	end
-end
-
-endmodule
 
 /////////////////////////////////////////////////////////////////////////////////////////
 module horiz_gen
 (
 	input clk,
-	input ce,
 	input rst,
 	input HP1,
 	input HP2,
 	input rsync,
 	input hmove,
 	output hsync,
-	output reg cntd,
-	output reg hblank, // Hblank signal with proper delays for hmove
-	output reg hgap, // Hblank signal without delay
+	output logic cntd,
+	output logic cnt,
+	output logic res0d,
+	output logic hblank, // Hblank signal with proper delays for hmove
+	output logic hgap, // Hblank signal without delay
 	output aud0, // Audio clocks need to be high twice per line
 	output aud1,
-	output reg shb,
-	output reg rhb,
-	output reg wsr
+	output logic shb,
+	output logic rhb,
+	output logic wsr,
+	output logic shbd
 );
 
 // Horizontal Phase Clock Timing
@@ -429,32 +122,34 @@ localparam hsync_end = hsync_start + 16;
 localparam hblank_start = 0; // Blank 68 counts
 localparam hblank_end = 67; // Blank 68 counts
 
-reg [5:0] lfsr;
-reg hmove_latch;
+logic [5:0] lfsr;
+logic hmove_latch;
 
-reg err, rhs, cnt, rcb, shs, lrhb;
+logic err, rhs, rcb, shs, lrhb;
 
 assign aud0 = (HP2 & (err | shb | lrhb));
 assign aud1 = (HP2 & (rhs | cnt));
 
-// always_comb begin
-// 	{err, wsr, shb, rhs, cnt, rcb, shs, lrhb, rhb} = 0;
-// 	case (lfsr)
-// 			6'b000000: wsr = 1;
-// 			6'b111111: err = 1;    // Error
-// 			6'b010100: shb = 1;    // End (Set Hblank)
-// 			6'b110111: rhs = 1;    // Reset HSync
-// 			6'b101100: cnt = 1;    // Center
-// 			6'b001111: rcb = 1;    // Reset Color Burst
-// 			6'b111100: shs = 1;    // Set Hsync
-// 			6'b011100: rhb = 1;    // Reset HBlank
-// 			6'b010111: lrhb = 1;   // Late Reset Hblank
-// 			default: {err, wsr, shb, rhs, cnt, rcb, shs, lrhb, rhb} = 0;
-// 	endcase
+assign res0d = err | shb;
+
+always_comb begin
+	{err, wsr, shb, rhs, cnt, rcb, shs, lrhb, rhb} = 0;
+	case (lfsr)
+			6'b000000: wsr = 1;
+			6'b111111: err = 1;    // Error
+			6'b010100: shb = 1;    // End (Set Hblank)
+			6'b110111: rhs = 1;    // Reset HSync
+			6'b101100: cnt = 1;    // Center
+			6'b001111: rcb = 1;    // Reset Color Burst
+			6'b111100: shs = 1;    // Set Hsync
+			6'b011100: rhb = 1;    // Reset HBlank
+			6'b010111: lrhb = 1;   // Late Reset Hblank
+			default: {err, wsr, shb, rhs, cnt, rcb, shs, lrhb, rhb} = 0;
+	endcase
 
 // 	if (rsync)
 // 		shb = 1;
-// end
+end
 
 // always_latch begin
 // 	if (cnt)
@@ -466,28 +161,16 @@ assign aud1 = (HP2 & (rhs | cnt));
 always_ff @(posedge clk) if (rst) begin
 	lfsr <= 6'd0;
 end else begin
+	if (hmove)
+		hmove_latch <= 1;
 
-	if (HP1) begin // clocked by HP1;
-		{err, wsr, shb, rhs, cnt, rcb, shs, lrhb, rhb} <= 0;
-		case (lfsr)
-				6'b000000: wsr <= 1;
-				6'b111111: err <= 1;    // Error
-				6'b010100: shb <= 1;    // End (Set Hblank)
-				6'b110111: rhs <= 1;    // Reset HSync
-				6'b101100: cnt <= 1;    // Center
-				6'b001111: rcb <= 1;    // Reset Color Burst
-				6'b111100: shs <= 1;    // Set Hsync
-				6'b011100: rhb <= 1;    // Reset HBlank
-				6'b010111: lrhb <= 1;   // Late Reset Hblank
-				default: {err, wsr, shb, rhs, cnt, rcb, shs, lrhb, rhb} <= 0;
-		endcase
-
-		if (hmove)
-			hmove_latch <= 1;
+	if (HP1) begin
+		shbd <= shb | rsync | err;
 	end
 
 	if (HP2) begin
-		lfsr <= {~((lfsr[1] & ~lfsr[0]) | ~(lfsr[1] | ~lfsr[0])), lfsr[5:1]};
+		//shbd2 <= shbd;
+		lfsr <= shbd ? 6'd0 : {~((lfsr[1] & ~lfsr[0]) | ~(lfsr[1] | ~lfsr[0])), lfsr[5:1]};
 
 		if (err | shb | rsync) begin
 			hblank <= 1;
@@ -523,67 +206,21 @@ end
 endmodule
 
 /////////////////////////////////////////////////////////////////////////////////////////
-// module object_clk
-// (
-// 	input clk,
-// 	input cc,
-// 	input reset,
-// 	input signed [3:0] move_cnt,
-// 	input hmove,
-// 	input hbs,
-// 	input hbr,
-// 	output reg OC1,
-// 	output reg OC2
-// );
-
-// reg [1:0] o_div;
-// reg in_blank;
-// reg [3:0] extra_cnt, supp_cnt;
-
-// always_ff @(posedge clk) begin :oclk
-// 	reg old_hmove;
-// 	old_hmove <= hmove;
-// 	OC1 <= 0;
-// 	OC2 <= 0;
-// 	if (cc) begin
-// 		if (reset) begin
-// 			extra_cnt <= 0;
-// 			supp_cnt <= 0;
-// 			o_div <= 0;
-// 		end else begin
-// 			o_div <= o_div + 2'd1;
-// 			if ()
-// 			if (hbs) in_blank <= 1;
-// 			if (hbr) in_blank <= 0;
-
-// 			if ((o_div == 1 && ~|supp_cnt))
-
-// 			if (hmove) begin //
-// 				if (move_cnt > 0) begin
-// 					extra_cnt <= move_cnt;
-// 				end else if (move_cnt < 0)
-// 					supp_cnt <= (~move_cnt) + 4'd1;
-// 				end
-// 			end
-// 		end
-// 	end
-// end
-
-// endmodule
-
-/////////////////////////////////////////////////////////////////////////////////////////
 module clockgen
 (
 	input clk,
 	input ce,
 	input reset,
 	input rsync,
-	output reg phi0,
-	output reg phi2_gen,
-	output reg phase,
-	output reg HP1,
-	output reg HP2,
-	output reg CC
+	input logic res0d,
+	output logic rsync_d,
+	output logic phi0,
+	output logic phi1,
+	output logic phi2_gen,
+	output logic phase,
+	output logic HP1,
+	output logic HP2,
+	output logic CC
 );
 
 // Generation of Phi0. One phi0 clock is 3x hardware clocks, but we will allow for CE so we can use a single PLL.
@@ -594,49 +231,414 @@ module clockgen
 // Phi0 represents the generated clock that drives the 6507, and Phi2 should be the same as Phi1, but one
 // "color clock" delayed, and it drives RIOT and parts of TIA. The actual "clk" port is any PLL.
 
-assign CC = ce;
+// Using 2x the native oscillator we can set up clocks like this
+
+//     0123456789ABCDEF123456789
+// CC  X-X-X-X-X-X-X-X-X-X-X-X-X
+// H01 X-------X-------X-------X
+// H02 ----X-------X-------X----
+// PH0 X-----X-----X-----X-----X
+// PH1 -X-----X-----X-----X-----
+// PH1 ----X-----X-----X-----X--
+
+//assign CC = ce;
+logic [2:0] phi_div;
+logic [2:0] hp_cnt;
+logic rsync_latch;
+logic phi_clear;
+
+assign HP1 = hp_cnt == 0 && ce;
+assign HP2 = hp_cnt == 4 && ce;
+
+assign phi0 = phi_div == 3 && ce;
+//assign phi2_gen = phi0;
+assign phi1 = phi_div == 1 && ce;
+assign phase = phi_div > 3 || phi_div == 0;
 
 always_ff @(posedge clk) begin : phi0_gen
-	reg [1:0] phi_div;
-	reg [1:0] hp_cnt;
-	phi0 <= 0;
-	phi2_gen <= 0;
-	HP1 <= 0;
-	HP2 <= 0;
+	phi2_gen <= phi0;
 
-	if (reset) begin
-		phi_div <= 0;
-		hp_cnt <= 0;
-		phi2_gen <= 0;
-	end else if (ce) begin
+	if (ce) begin
+		CC <= ~CC;
 		phi_div <= phi_div + 1'd1;
 		hp_cnt <= hp_cnt + 1'd1;
-		if (rsync) begin
-			hp_cnt <= 0;
-			HP1 <= 1;
-		end
-		if (hp_cnt == 0)
-			HP1 <= 1;
-		if (hp_cnt == 2)
-			HP2 <= 1;
 
-		if (phi_div >= 2) begin
+		if (phi_div == 5)
 			phi_div <= 0;
-		end
+	end
 
-		if (phi_div == 2) begin
-			phi0 <= 1;
-			phase <= 0;
-		end
+	if (rsync)
+		rsync_latch <= 1;
 
-		if (phi_div == 0) begin
-			phi2_gen <= 1;
-			phase <= 1;
-		end
+	if ((rsync || rsync_latch) && phi_div == 0 && ~CC) begin
+		rsync_latch <= 0;
+		rsync_d <= 1;
+		hp_cnt <= 0;
+		phi_clear <= 1;
+	end
+
+	if ((res0d || phi_clear) && HP1) begin
+		phi_div <= 1;
+		phi_clear <= 0;
+	end
+
+
+	if (reset) begin
+		rsync_latch <= 0;
+		CC <= 1;
+		phi_clear <= 0;
+		phi_div <= 0;
+		hp_cnt <= 0;
 	end
 end
 
 endmodule
+
+/////////////////////////////////////////////////////////////////////////////////////////
+module hmove_gen
+(
+	input  logic       clk,
+	input  logic       reset,
+	input  logic       HP1,
+	input  logic       HP2,
+	input  logic       hmove,
+	input  logic       hblank,
+	input  logic [3:0] p0_m,
+	input  logic [3:0] p1_m,
+	input  logic [3:0] m0_m,
+	input  logic [3:0] m1_m,
+	input  logic [3:0] bl_m,
+	output logic       p0_mclk,
+	output logic       p1_mclk,
+	output logic       m0_mclk,
+	output logic       m1_mclk,
+	output logic       bl_mclk
+);
+	logic p0ec, p1ec, m0ec, m1ec, blec;
+
+	assign p0_mclk = ~hblank | (p0ec & HP1);
+	assign p1_mclk = ~hblank | (p1ec & HP1);
+	assign m0_mclk = ~hblank | (m0ec & HP1);
+	assign m1_mclk = ~hblank | (m1ec & HP1);
+	assign bl_mclk = ~hblank | (blec & HP1);
+
+	always @(posedge clk) begin : hmove_block
+		logic [3:0] hmove_cnt;
+		logic sec, sec_1;
+
+		if (hmove)
+			sec_1 <= 1;
+
+		if (HP1) begin
+			sec <= sec_1 | hmove;
+			sec_1 <= 0;
+		end
+
+		if (HP2) begin
+			if (|hmove_cnt | sec)
+				hmove_cnt <= hmove_cnt + 1'd1;
+
+			// Can be overwritten below
+			if (sec)
+				{p0ec, p1ec, m0ec, m1ec, blec} <= 5'b11111;
+
+			if (p0_m[3:0] == {~hmove_cnt[3], hmove_cnt[2:0]})
+				p0ec <= 0;
+			if (p1_m[3:0] == {~hmove_cnt[3], hmove_cnt[2:0]})
+				p1ec <= 0;
+			if (m0_m[3:0] == {~hmove_cnt[3], hmove_cnt[2:0]})
+				m0ec <= 0;
+			if (m1_m[3:0] == {~hmove_cnt[3], hmove_cnt[2:0]})
+				m1ec <= 0;
+			if (bl_m[3:0] == {~hmove_cnt[3], hmove_cnt[2:0]})
+				blec <= 0;
+
+		end
+	end
+
+endmodule
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+module playfield
+(
+	input clk,
+	input reset,
+	input HP1,
+	input HP2, // Horizontal clock phase 2
+	input hblank,
+	input reflect, // Control playfield, 1 makes right half mirror image
+	input cnt,   // center signal, high means right half
+	input rhb,
+	input [19:0] pfc, // Combined playfield registers
+	output logic pf
+);
+
+logic [4:0] pf_index;
+
+// Outputs in order PF0 4..7, PF1 7:0, PF2 0:7
+logic [4:0] index_lut[20];
+assign index_lut = '{
+	5'd00, 5'd01, 5'd02, 5'd03,                             // PF0
+	5'd11, 5'd10, 5'd09, 5'd08, 5'd07, 5'd06, 5'd05, 5'd04, // PF1 in reverse
+	5'd12, 5'd13, 5'd14, 5'd15, 5'd16, 5'd17, 5'd18, 5'd19  // PF2
+};
+
+//assign pf = hblank ? 1'd0 : pfc[index_lut[pf_index]];
+
+// ((cnt & ~mirror) | rhb)
+// ~(~cnt | ~mirror)
+
+// logic and1 = cnt & ~reflect;
+// logic nor1 = ~|{~cnt, ~relfect};
+// logic nor2 = |{and1, rhb};
+
+always @(posedge clk) begin : pf_block
+	logic dir;
+	// The first half of the screen should draw from left to right in a strange order:
+	// PF0[7:4], PF1[0:7], PF2[7:0] Note that PF1 is drawn backwards.
+	// PF0     PF1         PF2
+	// 4567 <- 76543210 <- 01234567
+
+
+	if (HP2) begin
+		pf <= pfc[index_lut[pf_index]];
+
+		if (dir & |pf_index)
+			pf_index <= pf_index - 5'd1;
+		else if (~dir & pf_index < 19)
+			pf_index <= pf_index + 5'd1;
+
+		if (cnt & reflect)
+		dir <= 1;
+
+		if (rhb | (cnt & ~reflect)) begin
+			dir <= 0;
+			pf_index <= 0;
+		end
+	end
+
+
+
+	if (reset) begin
+		dir <= 0;
+		pf_index <= 0;
+	end
+end
+
+endmodule
+
+/////////////////////////////////////////////////////////////////////////////////////////
+module player_o
+(
+	input clk,
+	input motck,
+	input enable,
+	input resp,
+	input reset,
+	input delay,
+	input [7:0] grp,
+	input [7:0] grpo,
+	input refp, // Player reflect
+	input [2:0] size,
+	output m_rst,
+	output p
+);
+
+logic [5:0] lfsr;
+logic start;
+
+logic PP0, PP1, PP1_edge; // Player clocks
+logic scan_clk;
+logic [1:0] player_div;
+logic fstob;
+logic [2:0] scan_out;
+
+logic ce;
+logic scan_en;
+assign PP0 = player_div == 0;
+assign PP1_edge = player_div == 2;
+assign PP1 = player_div == 3;
+assign ce = motck & enable;
+assign m_rst = fstob && scan_out == 1;
+
+
+always_ff @(posedge clk) begin
+	if (ce) begin
+		//{PP0, PP1} <= 0;
+		player_div <= player_div + 2'd1;
+
+		scan_clk <=
+			(~(size == 3'b111) && ~(size == 3'b101)) ||
+			(PP1 && ((size == 3'b111) | (size == 3'b101))) ||
+			(PP0 && (size == 3'b101));
+
+		if (PP1_edge) begin
+			lfsr <= {~((lfsr[1] & ~lfsr[0]) | ~(lfsr[1] | ~lfsr[0])), lfsr[5:1]};
+			if (lfsr == 6'b111111 || lfsr == 6'b101101)
+				lfsr <= 0;
+			if  ((lfsr == 6'b101101) ||
+				((lfsr == 6'b111000) && ((size == 3'b001) || (size == 3'b011))) ||
+				((lfsr == 6'b101111) && ((size == 3'b011) || (size == 3'b010) || (size == 3'b110))) ||
+				((lfsr == 6'b111001) && ((size == 3'b100) || (size == 3'b110)))) begin
+				start <= 1;
+				if (lfsr == 6'b101101)
+					fstob <= 1;
+				else
+					fstob <= 0;
+			end else begin
+				start <= 0;
+			end
+		end
+
+		if (scan_clk) begin
+			if (start)
+				scan_en <= 1;
+			else if (scan_out == 3'b111)
+				scan_en <= 0;
+
+			if (scan_en)
+				scan_out <= scan_out + 1'b1;
+		end
+end
+
+	if (resp | reset) begin
+		lfsr <= 0;
+		player_div <= 0;
+	end
+end
+
+logic [2:0] scan_adr;
+logic [1:0] pix_sel;
+
+assign scan_adr = refp ? scan_out : ~scan_out;
+//assign scan_cnt = scan_en & scan_clk & count;
+assign pix_sel = {scan_en, delay};
+assign p = pix_sel == 2'b10 ? grp[scan_adr] : pix_sel == 2'b11 ? grpo[scan_adr] : 1'b0;
+
+
+
+endmodule
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+module missile_o
+(
+	input clk,
+	input ce,
+	input resm,
+	input resmp,
+	input hmove,
+	input enam,
+	input [1:0] size,
+	output m
+);
+
+// logic [5:0] lfsr;
+// logic start;
+
+// logic PP0, PP1, PP1_edge; // Player clocks
+// logic scan_clk;
+// logic [1:0] player_div;
+// logic fstob;
+// logic [2:0] scan_out;
+
+// logic ce;
+// logic scan_en;
+// assign PP0 = player_div == 1;
+// assign PP1_edge = player_div == 2;
+// assign PP1 = player_div == 3;
+// assign ce = motck & enable;
+
+// always_ff @(posedge clk) begin
+// 	if (ce) begin
+// 		player_div <= player_div + 2'd1;
+
+// 		if (PP1_edge) begin
+// 			lfsr <= {~((lfsr[1] & ~lfsr[0]) | ~(lfsr[1] | ~lfsr[0])), lfsr[5:1]};
+// 			if (lfsr == 6'b111111 || lfsr == 6'b101101)
+// 				lfsr <= 0;
+// 			if  ((lfsr == 6'b101101) ||
+// 				((lfsr == 6'b111000) && ((size == 3'b001) || (size == 3'b011))) ||
+// 				((lfsr == 6'b101111) && ((size == 3'b011) || (size == 3'b010) || (size == 3'b110))) ||
+// 				((lfsr == 6'b111001) && ((size == 3'b100) || (size == 3'b110)))) begin
+// 				start <= 1;
+// 				if (lfsr == 6'b101101)
+// 					fstob <= 1;
+// 				else
+// 					fstob <= 0;
+// 			end else begin
+// 				start <= 0;
+// 			end
+// 		end
+// 	end
+// end
+
+endmodule
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+module ball_o
+(
+	input clk,
+	input cc,
+	input delay,
+	input enabl, // Enaball, get it ena..ball.. It was funnier in the 70s.
+	input resbl,
+	input hblank,
+	input [1:0] size,
+	output bl
+);
+
+// logic [5:0] lfsr_bl;
+
+// always @(posedge clk) if (resbl) begin
+// end else begin
+// 	lfsr_bl <= {~(~(lfsr_bl[1] | lfsr_bl[0]) | (lfsr_bl[0] & lfsr_bl[1])), lfsr_bl[5:1]};
+// end
+
+logic [5:0] lfsr;
+logic start, start_last;
+
+logic P0, P1; // Ball clocks
+logic [1:0] div;
+
+assign bl = 0;//(start && (size[1] | P1 | (div == 2 && size == 3))) || (start_last && size == 3);
+
+always_ff @(posedge clk) begin
+	{P0, P1} <= 0;
+
+	if (cc & enabl) begin
+		div <= div + 2'd1;
+		if (div == 3)
+			P0 <= 1;
+		if (div <= 1)
+			P1 <= 1;
+	end
+
+	if (P1) begin
+		lfsr <= {~(~(lfsr[1] | lfsr[0]) | (~lfsr[0] & lfsr[1])), lfsr[5:1]};
+		start_last <= start;
+		if (lfsr == 6'b111111) // Error
+			lfsr <= 0;
+
+		if (lfsr == 6'b101101) begin
+			lfsr <= 0;
+			start <= 1;
+		end else begin
+			start <= 0;
+		end
+	end
+
+	if (resbl) begin
+		lfsr <= 0;
+	end
+end
+
+endmodule
+
+
 
 /////////////////////////////////////////////////////////////////////////////////////////
 module priority_encoder
@@ -690,18 +692,135 @@ end
 endmodule
 
 /////////////////////////////////////////////////////////////////////////////////////////
+module audio_channel
+(
+	input clk,
+	input reset,
+	input ce,
+	input aud0,
+	input aud1,
+	input [3:0] volume,
+	input [4:0] freq,
+	input [3:0] audc,
+	output [3:0] audio
+);
+
+// Audio is quite a lot of convoluted wide nors and odd shifting, so
+// I just did it at gate level.
+
+// Frequency divider area signals
+logic freq_clk;
+logic [4:0] freq_div;
+logic T1, T2;
+
+// Noise area signals
+logic [4:0] noise;
+logic noise_wnor_1;
+logic noise_wnor_2;
+logic nor1, nor2, nor3, nor4, nor5, nor6, nor7, nor8;
+logic and1, and2;
+logic noise0_latch_n;
+logic nor2_latch;
+
+// Pulse area signals
+logic [3:0] pulse;
+logic nor_a, nor_b, nor_c, nor_d, nor_e;
+logic pulse_bit;
+logic pulse_wnor_1;
+logic pulse_wnor_2;
+logic rnor1, rnor2, rnor3;
+logic rand1;
+
+// Frequency divider area logic
+assign T1 = aud0 & freq_clk;
+assign T2 = aud1 & freq_clk;
+
+// Noise area logic
+assign nor1 = ~|{~audc[1:0], noise0_latch_n};
+assign nor2 = ~|{nor1, ~audc[1], noise_wnor_1};
+assign nor3 = ~|{audc[1:0], pulse_wnor_1};
+assign nor4 = ~|audc[1:0];
+assign nor5 = ~|{~noise[2], nor4};
+assign nor6 = ~|{nor5, and1};
+assign nor7 = ~|{nor6, noise[0]};
+assign nor8 = ~|{nor_a, nor7, and2, noise_wnor_2};
+
+assign and1 = nor4 & pulse[0];
+assign and2 = noise[0] & nor6;
+
+assign noise_wnor_1 = ~|{noise[4:2], ~noise[1], audc[0], ~audc[1]};
+assign noise_wnor_2 = ~|{noise, nor3};
+
+// Pulse area logic
+assign rnor1 = ~|{pulse_wnor_2, pulse[1]};
+assign rnor2 = ~|{pulse[1], pulse[0]};
+assign rnor3 = ~|{pulse_wnor_1, rnor2, rand1};
+
+assign rand1 = pulse[1] & pulse[0];
+
+assign nor_a = ~|audc;
+assign nor_b = ~|{audc[3:2], rnor3};
+assign nor_c = ~|{~audc[3:2], rnor1};
+assign nor_d = ~|{audc[3], ~audc[2], ~pulse[3]};
+assign nor_e = ~|{~audc[3], audc[2], noise0_latch_n};
+
+assign pulse_bit = ~|{nor_a, nor_b, nor_c, nor_d, nor_e};
+
+assign pulse_wnor_1 = ~|{~pulse[3], pulse[2], ~pulse[1], pulse[0]};
+assign pulse_wnor_2 = ~|pulse[3:1];
+
+// Clocked registers
+always_ff @(posedge clk) begin
+
+	if (aud0) begin
+		freq_clk <= 0;
+		freq_div <= freq_div + 1'd1;
+		if (freq_div >= freq) begin
+			freq_div <= 0;
+			freq_clk <= 1;
+		end
+	end
+
+	if (T1) begin // aud0
+		noise0_latch_n <= ~noise[0];
+		nor2_latch <= nor2;
+	end
+
+	if (T2) begin // aud1
+		noise <= {~nor8, noise[4:1]};
+		if (~nor2_latch)
+			pulse <= {pulse_bit, ~pulse[3:1]};
+	end
+
+	if (reset) begin
+		noise0_latch_n <= 0;
+		nor2_latch <= 0;
+		noise <= 0;
+		pulse <= 0;
+	end
+
+end
+
+assign audio = pulse[0] ? volume : 4'd0;
+
+endmodule
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
 module TIA2
 (
 	// Original Pins
 	input        clk,
 	output       phi0,
 	input        phi2,
+	output logic phi1,
 	input        RW_n,
-	output reg   rdy,
+	output logic   rdy,
 	input  [5:0] addr,
 	input  [7:0] d_in,
-	output logic [7:0] d_out,
-	input  [3:0][7:0] i,     // On real hardware, these would be ADC pins. i0..3
+	output [7:0] d_out,
+	input  [3:0] i,     // On real hardware, these would be ADC pins. i0..3
 	input        i4,
 	input        i5,
 	output [3:0] aud0,
@@ -719,26 +838,29 @@ module TIA2
 	input        video_ce,
 	output       vblank,
 	output       hblank,
+	output       hgap,
 	output       vsync,
 	output       hsync,
 	output       phi2_gen
 );
 
-reg [7:0] wreg[64]; // Write registers. Only 44 are used.
-reg [7:0] rreg[16]; // Read registers.
-reg rdy_latch; // buffer for the rdy signal
-reg [14:0] collision;
+logic [7:0] wreg[64]; // Write registers. Only 44 are used.
+logic [7:0] rreg[16]; // Read registers.
+logic rdy_latch; // buffer for the rdy signal
+logic [14:0] collision;
 
-wire [7:0] read_val;
-wire cs = ~cs0_n & ~cs2_n; // Chip Select (cs1 and 3 were NC)
-wire phase; // 0 = phi0, 1 = phi2
-wire wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr; // Strobe register signals
-wire [3:0] color_select;
-wire p0, p1, m0, m1, bl, pf; // Current object active flags
-wire aclk0, aclk1, cntd;
-wire HP1, HP2; // Horizontal phase clocks
-wire cc; // Color Clock (original oscillator speed)
-wire rhb, shb, wsr; // Hblank triggers
+logic [7:0] read_val;
+logic cs;  // Chip Select (cs1 and 3 were NC)
+logic phase; // 0 = phi0, 1 = phi2
+logic wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr; // Strobe register signals
+logic [3:0] color_select;
+logic p0, p1, m0, m1, bl, pf; // Current object active flags
+logic aclk0, aclk1, cntd, cnt;
+logic HP1, HP2; // Horizontal phase clocks
+logic cc; // Color Clock (original oscillator speed)
+logic rhb, shb, wsr, shbd; // Hblank triggers
+
+assign cs = ~cs0_n & ~cs2_n;
 
 assign d_out[5:0] = 6'h00;
 assign BLK_n = ~(hblank | vblank);
@@ -750,59 +872,75 @@ assign vblank = wreg[VBLANK][1];
 // Register writes happen when Phi2 falls, or in our context, when Phi0 rises.
 // Register reads happen when Phi2 is high. This is relevant in particular to RIOT which is clocked on Phi2.
 
-// always_comb begin
-// 	d_out[7:6] = 2'b11;
-// 	if (cs & RW_n) begin
-// 		if (addr[3:0] == INPT4 && ~wreg[VSYNC][6])
-// 			d_out[7:6] = {i4, 1'b1};
-// 		else if (addr[3:0] == INPT5 && ~wreg[VSYNC][6])
-// 			d_out[7:6] = {i5, 1'b1};
-// 		else
-// 			d_out[7:6] = rreg[addr[3:0]][7:6]; // reads only use the lower 4 bits of addr
-// 	end
-// end
+always @(posedge phi2) begin
+	d_out[7:6] <= 2'b00; // Should be open bus if invalid reg
+	if (cs & RW_n) begin
+		if (addr[3:0] == INPT4 && ~wreg[VBLANK][6])
+			d_out[7:6] <= {i4, 1'b0};
+		else if (addr[3:0] == INPT5 && ~wreg[VBLANK][6])
+			d_out[7:6] <= {i5, 1'b0};
+		else
+			d_out[7:6] <= rreg[addr[3:0]][7:6]; // reads only use the lower 4 bits of addr
+	end
+end
 
-always @(posedge clk) if (rst) begin
-	d_out[7:6] <= 2'd0;
-	wreg <= '{64{8'h00}};
-end else if (phi2 & cs & ~RW_n) begin
-	wreg[addr] <= d_in;
-end else if (phi2 & cs & RW_n) begin
-	if (addr[3:0] == INPT4 && ~wreg[VBLANK][6])
-		d_out[7:6] <= {i4, 1'b0};
-	else if (addr[3:0] == INPT5 && ~wreg[VBLANK][6])
-		d_out[7:6] <= {i5, 1'b0};
-	else
-		d_out[7:6] <= rreg[addr[3:0]][7:6]; // reads only use the lower 4 bits of addr
+always @(posedge clk) begin
+
+	if (phi2 & cs & ~RW_n && addr <= 6'h2C) begin
+		wreg[addr] <= d_in;
+		if (addr == GRP0)
+			wreg[GRP0O] <= wreg[GRP0];
+		if (addr == GRP1)
+			wreg[GRP1O] <= wreg[GRP1];
+
+	end
+
+	if (hmclr) begin
+		wreg[HMP0] <= 0;
+		wreg[HMP1] <= 0;
+		wreg[HMM0] <= 0;
+		wreg[HMM1] <= 0;
+		wreg[HMBL] <= 0;
+	end
+
+	if (rst)
+		wreg <= '{64{8'h00}};
 end
 
 // "Strobe" registers have an immediate effect
-always_comb begin
-	{wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr} = '0;
-	if (~RW_n && cs && phi2) begin
+always @(posedge clk) begin
+	//{wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr} = '0;
+	if (HP1) begin
+		{wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr} <= '0;
+	end
+
+	if (~RW_n && phase && cs) begin
 		case(addr)
-			WSYNC: wsync = 1;
-			RSYNC: rsync = 1;
-			RESP0: resp0 = 1;
-			RESP1: resp1 = 1;
-			RESM0: resm0 = 1;
-			RESM1: resm1 = 1;
-			RESBL: resbl = 1;
-			HMOVE: hmove = 1;
-			HMCLR: hmclr = 1;
-			CXCLR: cxclr = 1;
-			default: {wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr} = '0;
+			WSYNC: wsync <= 1;
+			RSYNC: rsync <= 1;
+			RESP0: resp0 <= 1;
+			RESP1: resp1 <= 1;
+			RESM0: resm0 <= 1;
+			RESM1: resm1 <= 1;
+			RESBL: resbl <= 1;
+			HMOVE: hmove <= 1;
+			HMCLR: hmclr <= 1;
+			CXCLR: cxclr <= 1;
+			//default: {wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr} = '0;
 		endcase
 	end
 end
+
 
 // Unaccount for:
 // VDELP0
 
 // Submodules
 
-wire [7:0] uv_gen;
-wire vs_gen, vb_gen, hs_gen, hb_gen;
+logic [7:0] uv_gen;
+logic vs_gen, vb_gen, hs_gen, hb_gen;
+logic p0ec, p1ec, m0ec, m1ec, blec;
+logic res0d;
 
 // frame_gen frame
 // (
@@ -824,7 +962,9 @@ clockgen clockgen
 	.clk      (clk),
 	.ce       (ce),
 	.CC       (cc),
+	.res0d   (res0d),
 	.phi0     (phi0),
+	.phi1     (phi1),
 	.phi2_gen (phi2_gen),
 	.rsync    (rsync | rst),
 	.HP1      (HP1),
@@ -835,18 +975,21 @@ clockgen clockgen
 horiz_gen h_gen
 (
 	.clk    (clk),
-	.ce     (ce),
 	.HP1    (HP1),
 	.HP2    (HP2),
 	.rsync  (rsync | rst),
 	.hmove  (hmove),
 	.hsync  (hsync),
+	.hgap   (hgap),
+	.res0d (res0d),
 	.hblank (hblank),
 	.cntd   (cntd),
+	.cnt    (cnt),
 	.aud0   (aclk0),
 	.aud1   (aclk1),
 	.shb    (shb),
 	.rhb    (rhb),
+	.shbd   (shbd),
 	.wsr    (wsr)
 );
 
@@ -854,24 +997,48 @@ playfield playfield
 (
 	.clk(clk),
 	.reset(rst),
+	.HP1(HP1),
 	.HP2(HP2),
+	.rhb(rhb),
 	.hblank(hblank),
 	.reflect(wreg[CTRLPF][0]),
-	.cnt(cntd),
+	.cnt(cnt),
 	.pfc({wreg[PF2], wreg[PF1], wreg[PF0][7:4]}),
 	.pf(pf)
 );
 
+
+hmove_gen hmv
+(
+	.clk     (clk),
+	.reset   (rst),
+	.HP1     (HP1),
+	.HP2     (HP2),
+	.hmove   (hmove),
+	.hblank  (hblank),
+	.p0_m    (wreg[HMP0]),
+	.p1_m    (wreg[HMP1]),
+	.m0_m    (wreg[HMM0]),
+	.m1_m    (wreg[HMM1]),
+	.bl_m    (wreg[HMBL]),
+	.p0_mclk (p0ec),
+	.p1_mclk (p1ec),
+	.m0_mclk (m0ec),
+	.m1_mclk (m1ec),
+	.bl_mclk (blec)
+);
+
+
 player_o player0
 (
 	.clk(clk),
-	.cc(cc),
+	.motck(cc),
+	.enable(p0ec),
 	.resp(resp0),
 	.reset(rst),
-	.hmove(hmove),
-	.hmclr(hmclr),
-	.hmp(wreg[HMP0][7:4]),
+	.delay(wreg[VDELP0]),
 	.grp(wreg[GRP0]),
+	.grpo(wreg[GRP0O]),
 	.refp(wreg[REFP0][3]),
 	.size(wreg[NUSIZ0][2:0]),
 	.p(p0)
@@ -879,11 +1046,14 @@ player_o player0
 
 player_o player1
 (
+	.clk(clk),
+	.motck(cc),
+	.enable(p1ec),
 	.resp(resp1),
-	.hmove(hmove),
-	.hmclr(hmclr),
-	.hmp(wreg[HMP1][7:4]),
+	.reset(rst),
+	.delay(wreg[VDELP1]),
 	.grp(wreg[GRP1]),
+	.grpo(wreg[GRP1O]),
 	.refp(wreg[REFP1][3]),
 	.size(wreg[NUSIZ1][2:0]),
 	.p(p1)
@@ -894,9 +1064,7 @@ missile_o missile0
 	.resm(resm0),
 	.resmp(wreg[RESMP0][1]),
 	.hmove(hmove),
-	.hmclr(hmclr),
 	.enam(wreg[ENAM0][1]),
-	.hmm(wreg[HMM0][7:4]),
 	.size(wreg[NUSIZ0][5:4]),
 	.m(m0)
 );
@@ -906,9 +1074,7 @@ missile_o missile1
 	.resm(resm1),
 	.resmp(wreg[RESMP1][1]),
 	.hmove(hmove),
-	.hmclr(hmclr),
 	.enam(wreg[ENAM1][1]),
-	.hmm(wreg[HMM1][7:4]),
 	.size(wreg[NUSIZ1][5:4]),
 	.m(m1)
 );
@@ -917,10 +1083,8 @@ ball_o ball
 (
 	.clk(clk),
 	.resbl(resbl),
-	.hmove(hmove),
-	.hmclr(hmclr),
+	.delay(wreg[VDELBL]),
 	.enabl(wreg[ENABL][1]),
-	.hmbl(wreg[HMBL][7:4]),
 	.size(wreg[CTRLPF][5:4]),
 	.bl(bl)
 );
@@ -981,24 +1145,23 @@ end
 
 // WSYNC register controls the RDY signal to the CPU. It is cleared at the start of hblank.
 always_ff @(posedge clk) begin
-	if (rst) begin
-		rdy <= 1;
-	end else if (cc) begin
-		if (wsync)
-			rdy <= 0;
+	if (wsync)
+		rdy <= 0;
 
-		if (wsr)
-			rdy <= 1;
-	end
+	if (shbd & HP2)
+		rdy <= 1;
+
+	if (rst)
+		rdy <= 1;
 end
 
 // Calculate the collisions
-reg hsync_clock;
+logic hsync_clock;
 
 always_ff @(posedge clk) begin : read_reg_block
-	reg old_hsync;
-	reg [8:0] x;
-	reg [7:0] icount;
+	logic old_hsync;
+	logic [8:0] x;
+	logic [7:0] icount;
 
 	hsync_clock <= 0;
 	old_hsync <= hsync;
@@ -1024,10 +1187,11 @@ always_ff @(posedge clk) begin : read_reg_block
 			rreg[CXPPMM][7:6] <= (rreg[CXPPMM][7:6]| {(p0 & p1), (m0 & m1)});
 		end
 
-		// So analog input requires simulating the capacitor recharge of the paddle
+		// Analog input requires simulating the capacitor recharge of the paddle
 		// circuit. This generally takes 1 hsync per (196 - (value / 2)) of the given input port.
 		for (x = 0; x < 4; x = x + 1'd1) begin
-			rreg[{2'b10, x[1:0]}][7] <= ((8'd196 - i[x[1:0]][7:1]) <= icount);
+			rreg[{2'b10, x[1:0]}][7] <= wreg[VBLANK][7] ? 1'b0 : i[x[1:0]];
+			//rreg[{2'b10, x[1:0]}][7] <= ((8'd196 - i[x[1:0]][7:1]) <= icount);
 		end
 	end
 
@@ -1045,10 +1209,9 @@ always_ff @(posedge clk) begin : read_reg_block
 			{rreg[INPT4][7], rreg[INPT5][7]} <= '1;
 		end
 	end
-
-	if (wreg[VSYNC][7]) begin
-		icount <= 0;
-	end else if (hsync_clock && icount < 255) begin
+	if (wreg[VBLANK][7]) begin
+		icount <= 1;
+	end else if (hsync_clock && icount < 196) begin
 		icount <= icount + 1'd1;
 	end
 end
@@ -1057,17 +1220,19 @@ end
 // audv0 + audv1.
 // Generated based on the info here: https://atariage.com/forums/topic/271920-tia-sound-abnormalities/
 
-reg [15:0] audio_lut[32] = '{
-	16'h0000, 16'h0842, 16'h0FFF, 16'h1745, 16'h1E1D, 16'h2492, 16'h2AAA, 16'h306E,
-	16'h35E4, 16'h3B13, 16'h3FFF, 16'h44AE, 16'h4924, 16'h4D64, 16'h5173, 16'h5554,
-	16'h590A, 16'h5C97, 16'h5FFF, 16'h6343, 16'h6665, 16'h6968, 16'h6C4D, 16'h6F17,
-	16'h71C6, 16'h745C, 16'h76DA, 16'h7942, 16'h7B95, 16'h7DD3, 16'h7FFF, 16'hFFFF
-};
+// logic [15:0] audio_lut[32];
+// assign audio_lut = '{
+// 	16'h0000, 16'h0842, 16'h0FFF, 16'h1745, 16'h1E1D, 16'h2492, 16'h2AAA, 16'h306E,
+// 	16'h35E4, 16'h3B13, 16'h3FFF, 16'h44AE, 16'h4924, 16'h4D64, 16'h5173, 16'h5554,
+// 	16'h590A, 16'h5C97, 16'h5FFF, 16'h6343, 16'h6665, 16'h6968, 16'h6C4D, 16'h6F17,
+// 	16'h71C6, 16'h745C, 16'h76DA, 16'h7942, 16'h7B95, 16'h7DD3, 16'h7FFF, 16'hFFFF
+// };
 
-reg [15:0] audio_lut_single[16] = '{
-	16'h0000, 16'h0C63, 16'h17FF, 16'h22E8, 16'h2D2C, 16'h36DB, 16'h3FFF, 16'h48A5,
-	16'h50D6, 16'h589C, 16'h5FFF, 16'h6705, 16'h6DB6, 16'h7416, 16'h7A2D, 16'h7FFF
-};
+// logic [15:0] audio_lut_single[16];
+// assign audio_lut_single = '{
+// 	16'h0000, 16'h0C63, 16'h17FF, 16'h22E8, 16'h2D2C, 16'h36DB, 16'h3FFF, 16'h48A5,
+// 	16'h50D6, 16'h589C, 16'h5FFF, 16'h6705, 16'h6DB6, 16'h7416, 16'h7A2D, 16'h7FFF
+// };
 
 endmodule
 

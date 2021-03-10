@@ -379,11 +379,27 @@ Atari7800 main
 	.PAin         (PAin),  // Direction {RA, LA, DA, UA, RB, LB, DB, UB}
 	.PBin         (PBin),  // Port B input
 	.PAout        (PAout), // Port A output
-	.PBout        (PBout)  // Peanut butter
+	.PBout        (PBout),  // Peanut butter
+	
+	// 2600 Cart Flags from detect2600
+	.force_bs     (force_bs),
+	.sc           (sc)
 );
 
 
 ////////////////////////////  MEMORY  ///////////////////////////////////
+wire [3:0] force_bs;
+wire sc;
+
+detect2600 detect2600
+(
+	.clk(clk_sys),
+	.addr(ioctl_addr[12:0]),
+	.enable(ioctl_wr & cart_download),
+	.data(ioctl_dout),
+	.force_bs(force_bs),
+	.sc(sc)
+);
 
 
 //wire cart_is_7800 = ~|ioctl_index[7:6];
@@ -562,5 +578,8 @@ video_mixer video_mixer
 	.G(G),
 	.B(B)
 );
+
+
+
 
 endmodule

@@ -50,7 +50,11 @@ output logic        tia_en,
 input  logic  [7:0] PAin,
 input  logic  [7:0] PBin,
 output logic  [7:0] PAout,
-output logic  [7:0] PBout
+output logic  [7:0] PBout,
+
+// 2600 Cart force flags based on detection
+input logic [3:0] force_bs,
+input logic sc
 );
 
 	assign ld[5:1] = '0;
@@ -431,6 +435,13 @@ ctrl_reg ctrl
 
 wire cart_read_flag;
 assign cart_read = cart_read_flag & mclk1;
+
+logic [24:0] cart_2600_addr_out,cart_7800_addr_out;
+logic [7:0] cart_2600_DB_out , cart_7800_DB_out;
+
+assign cart_addr_out = tia_mode ? cart_2600_addr_out : cart_7800_addr_out;
+assign cart_DB_out = tia_mode ? cart_2600_DB_out : cart_7800_DB_out;
+
 cart cart
 (
 	.clk_sys    (clk_sys),
@@ -450,11 +461,26 @@ cart cart
 	.cart_read  (cart_read_flag),
 	.hsc_en     (hsc_en),
 	.rw         (RW),
-	.dout       (cart_DB_out),
+	.dout       (cart_7800_DB_out),
 	.pokey_audio(pokey_audio),
 	.ym_audio_r (ym_audio_r),
 	.ym_audio_l (ym_audio_l),
-	.rom_address(cart_addr_out)
+	.rom_address(cart_7800_addr_out)
+);
+
+cart2600 cart2600
+(
+	.reset(reset),
+	.clk(clk_sys),
+	.ph0_en(pclk0),
+	.cpu_d_out(cart_2600_DB_out),
+	.cpu_d_in(write_DB),
+	.cpu_a(AB[12:0]),
+	.sc(sc),
+	.force_bs(force_bs),
+	.rom_a(cart_2600_addr_out),
+	.rom_do(cart_out),
+	.rom_size(cart_size)
 );
 
 endmodule

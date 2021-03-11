@@ -6,10 +6,13 @@ set_global_assignment -name QIP_FILE rtl/Maria/maria.qip
 set_global_assignment -name QIP_FILE rtl/jt51/jt51.qip
 set_global_assignment -name VHDL_FILE rtl/dpram.vhd
 set_global_assignment -name VHDL_FILE rtl/bram.vhd
+set_global_assignment -name VHDL_FILE rtl/dpram.vhd
+set_global_assignment -name VHDL_FILE rtl/cart2600.vhdl
 set_global_assignment -name VERILOG_FILE rtl/souper.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tia.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cart.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/detect2600.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/RIOT/M6532.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/top.sv
 set_global_assignment -name SYSTEMVERILOG_FILE Atari7800.sv

@@ -51,7 +51,6 @@ input  logic  [7:0] PAin,
 input  logic  [7:0] PBin,
 output logic  [7:0] PAout,
 output logic  [7:0] PBout,
-
 // 2600 Cart force flags based on detection
 input logic [3:0] force_bs,
 input logic sc
@@ -117,6 +116,7 @@ input logic sc
 
 	wire dma_en = maria_drive_AB;
 
+	logic mclk1;
 
 	//CS LOGIC
 	logic ram0_cs, ram1_cs, bios_cs, tia_cs, riot_cs, cart_cs, riot_ram_cs;
@@ -434,7 +434,7 @@ ctrl_reg ctrl
 );
 
 wire cart_read_flag;
-assign cart_read = cart_read_flag & mclk1;
+assign cart_read = cart_read_flag & (tia_en ? pclk0 : mclk1);
 
 logic [24:0] cart_2600_addr_out,cart_7800_addr_out;
 logic [7:0] cart_2600_DB_out , cart_7800_DB_out;

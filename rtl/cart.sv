@@ -46,15 +46,14 @@ logic [2:0] cart_cs_reg, cart_cs_reg_m;
 logic [7:0] bank_mask;
 logic [13:0] ram_mask;
 logic [7:0] XCTRL1, XCTRL2, XCTRL3, XCTRL4, XCTRL5; // 2-5 currently unused
-logic [24:0] old_rom_address;
 logic souper_ram_cs;
 logic [24:0] souper_addr;
 wire souper_en = cart_flags[12];
 logic [11:0] souper_bank;
+logic souper_wr;
 
 wire XCTRL1_cs = (cart_xm[0] && address_in[15:4] == 8'h47) && cart_cs;
 always @(posedge clk_sys) begin
-	old_rom_address <= rom_address;
 	cart_read <= rw && cart_cs;
 	if (reset) begin
 		{XCTRL1, XCTRL2, XCTRL3, XCTRL4, XCTRL5} <= 0;
@@ -97,7 +96,7 @@ always_ff @(posedge clk_sys) if (pclk1) begin
 		bank_map[3] <= {3'b000, bank_reg[1]};
 		bank_type <= 3'd3;
 	end else if (cart_flags[12]) begin                           // Souper
-		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
+		hardware_map <= '{3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
 		//bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd4};
 		bank_type <= 3'd4;
 	end else if (cart_flags[1] || cart_size >= 32'h10000) begin // SuperGame
@@ -248,12 +247,12 @@ always_ff @(posedge clk_sys) begin
 	end
 end
 
-spram #(.addr_width(14)) cart_ram
+spram #(.addr_width(15)) cart_ram
 (
 	.clock   (clk_sys),
 	.address (souper_en ? souper_addr : (address_in[13:0] & ram_mask)),
 	.data    (din),
-	.wren    ((~rw & ram_cs & pclk0) || (souper_ram_cs && souper_en && ~super_wr)),
+	.wren    ((ram_cs || (~souper_ram_cs && souper_en)) && ~rw && pclk0),
 	.q       (ram_dout),
 	.cs      (1)
 );
@@ -283,7 +282,7 @@ always_comb begin
 	if (XCTRL1_cs && rw)
 		dout = XCTRL1;
 	if (souper_en) begin
-		if (souper_ram_cs)
+		if (~souper_ram_cs)
 			dout = ram_dout;
 		else
 			dout = rom_din;
@@ -392,12 +391,12 @@ spram #(.addr_width(11), .mem_name("HSCR")) hsc_ram
 );
 
 logic souper_rom_cs;
-logic souper_wr;
 assign souper_addr = {souper_bank, address_in[6:0]};
 
 souper soup_soup (
-	.clk_phi2(pclk0), // FIXME create ce's
-	.reset_n(~reset),
+	.clk(clk_sys),
+	.pclk1(pclk0), // FIXME create ce's
+	.reset(reset),
 	.halt_n(halt_n),
 	.data(din),
 	.rw(rw),

@@ -25,8 +25,9 @@
 // 3. This notice may not be removed or altered from any source distribution.
 //------------------------------------------------------------------------------
 module souper(
-	clk_phi2,
-	reset_n,
+	clk,
+	pclk1,
+	reset,
 
 	halt_n,
 	data,
@@ -57,8 +58,9 @@ module souper(
 );
 	// System Clocks and Reset
 	//------------------------------
-	input			clk_phi2;
-	input			reset_n;
+	input			clk;
+	input			pclk1;
+	input			reset;
 
 	// Bits of a Bus
 	//------------------------------
@@ -127,23 +129,25 @@ module souper(
 					haltDelB_ir;
 	wire			marRead_i;
 
-assign oe_n = ~((clk_phi2 & rw) | marRead_i);
-assign wr_n = ~(clk_phi2 & ~rw);
+assign oe_n = ~((rw) | marRead_i);
+assign wr_n = ~(~rw);
 
 assign marRead_i = ~halt_n & haltDelB_ir;
 
-always@(negedge clk_phi2 or negedge reset_n) begin
-	if(~reset_n) begin
+always@(posedge clk) begin
+	if(reset) begin
 		haltDelA_ir <= 1'b0;
 		haltDelB_ir <= 1'b0;
-	end
-	else if(~halt_n) begin
-		haltDelA_ir <= ~halt_n;
-		haltDelB_ir <= haltDelA_ir;
 	end
 	else begin
-		haltDelA_ir <= 1'b0;
-		haltDelB_ir <= 1'b0;
+		if(~halt_n) begin
+			haltDelA_ir <= ~halt_n;
+			haltDelB_ir <= haltDelA_ir;
+		end
+		else if (pclk1) begin
+			haltDelA_ir <= 1'b0;
+			haltDelB_ir <= 1'b0;
+		end
 	end
 end
 
@@ -206,8 +210,8 @@ assign ramSel_n = (marRead_i & soupMode_ir)
 	reg[2:0]		exSelV_ir,
 					exSelD_ir;
 
-always@(negedge clk_phi2 or negedge reset_n) begin
-	if(~reset_n) begin
+always@(posedge clk) begin
+	if(reset) begin
 		chrMode_ir <= 0;
 		exMode_ir <= 0;
 		soupMode_ir <= 0;
@@ -217,20 +221,21 @@ always@(negedge clk_phi2 or negedge reset_n) begin
 		exSelV_ir <= 0;
 		exSelD_ir <= 0;
 		bankSel_ir <= 0;
-	end
-	else if(addr_15 & ~rw) begin
-		case({addr_2, addr_1, addr_0})
-			3'd0 : bankSel_ir <= data[4:0];
-			3'd1 : chrSelA_ir <= data[7:0];
-			3'd2 : chrSelB_ir <= data[7:0];
-			3'd3 : begin
-				soupMode_ir <= data[0];
-				chrMode_ir <= data[1];
-				exMode_ir <= data[2];
-			end
-			3'd4 : exSelV_ir <= data[2:0];
-			3'd5 : exSelD_ir <= data[2:0];
-		endcase
+	end else if (pclk1) begin
+		if(addr_15 & ~rw) begin
+			case({addr_2, addr_1, addr_0})
+				3'd0 : bankSel_ir <= data[4:0];
+				3'd1 : chrSelA_ir <= data[7:0];
+				3'd2 : chrSelB_ir <= data[7:0];
+				3'd3 : begin
+					soupMode_ir <= data[0];
+					chrMode_ir <= data[1];
+					exMode_ir <= data[2];
+				end
+				3'd4 : exSelV_ir <= data[2:0];
+				3'd5 : exSelD_ir <= data[2:0];
+			endcase
+		end
 	end
 end
 
@@ -247,15 +252,17 @@ end
 	reg[7:0]		audData_ir;
 	reg				audReq_ir;
 
-always@(negedge clk_phi2 or negedge reset_n) begin
-	if(~reset_n) begin
+always@(posedge clk) begin
+	if(reset) begin
 		audData_ir <= 0;
 		audReq_ir <= 1'b1;
 	end
-	else if(addr_15 & ~rw) begin
-		if(addr_2 & addr_1 & addr_0) begin
-			audData_ir <= data;
-			audReq_ir <= ~audReq_ir;
+	else if (pclk1) begin
+		if(addr_15 & ~rw) begin
+			if(addr_2 & addr_1 & addr_0) begin
+				audData_ir <= data;
+				audReq_ir <= ~audReq_ir;
+			end
 		end
 	end
 end

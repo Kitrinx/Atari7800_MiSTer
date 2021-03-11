@@ -64,6 +64,15 @@
 // VBLANKR: 000010000 16
 // VBLANKS: 100000010 258
 
+// clkedge, (blk/vbe + halt), (dli + out1 + (halt/vbe)), con1, con2
+// out0 0xx00
+// out1 00x11
+// out2 x0x01
+// out3 1x001
+// out4 01001
+// out5 1xx00
+// out6 0xx11
+
 module video_sync (
 	input logic        clk, reset,
 	input logic [7:0]  uv_in,

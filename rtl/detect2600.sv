@@ -476,22 +476,26 @@ bool CartDetector::isProbablySC(const ByteBuffer& image, size_t size)
 // grab and save the CRC for the first 128 bytes
 // each 4k check 128 bytes, and fail if CRC doesn't match
 reg [31:0] sc_crc0,sc_crc1;
-reg [7:0] crc_in;
-wire [31:0] crc_out;
 
 always @(posedge clk) begin
-	if (addr < 12'h80) begin
-		sc_crc0<=nextCRC32_D8(data,sc_crc0);
-		sc<=0;
+	if (enable) begin
+		if (addr < 13'h80) begin
+			if (addr==0)
+			begin
+				sc_crc1<=0;
+				sc<=0;
+				sc_crc0<=nextCRC32_D8(data,8'b0);
+			end
+			else 
+				sc_crc0<=nextCRC32_D8(data,sc_crc0);
+		end
+		else if (addr >= 13'h1000 && addr < 13'h1080) begin
+			sc_crc1<=nextCRC32_D8(data,sc_crc1);
+		end
+		else if (addr==13'h1080) begin
+			sc<= (sc_crc0==sc_crc1);
+		end
 	end
-	else if (addr >= 1000 && addr < 1080) begin
-		sc_crc1<=nextCRC32_D8(data,sc_crc1);
-
-	end
-	else if (addr==1080) begin
-		sc<= (sc_crc0==sc_crc1);
-	end
-	
 end
 
 

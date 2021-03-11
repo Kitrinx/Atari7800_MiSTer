@@ -45,7 +45,7 @@
 //            |                    454 cycles @7.16 Mhz            |
 //                               113.5 cycles @1.79 MHz
 
-// From the schematic. (not that the schematic may not be accurate to final)
+// From the schematic. (note that the schematic may not be accurate to final)
 // HRESET:   111000100 452 This attempts to reset at 452, but I believe due to an error it takes one extra cycle
 // HBORDERS: 110011101 413
 // HBORDERR: 001011101 93

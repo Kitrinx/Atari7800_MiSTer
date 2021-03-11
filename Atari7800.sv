@@ -188,8 +188,8 @@ assign VIDEO_ARY = status[8] ? 8'd9  : 12'd1294;
 
 assign VGA_SCALER = 0;
 
-assign {SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 6'b111111;
-assign SDRAM_DQ = 'Z;
+// assign {SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 6'b111111;
+// assign SDRAM_DQ = 'Z;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
@@ -269,7 +269,7 @@ wire [7:0]  ioctl_index;
 wire [21:0] gamma_bus;
 
 wire [15:0] joy0,joy1;
-
+wire ioctl_wait;
 
 
 hps_io #(.STRLEN(($size(CONF_STR)>>3))) hps_io
@@ -292,6 +292,7 @@ hps_io #(.STRLEN(($size(CONF_STR)>>3))) hps_io
 	.ioctl_wr(ioctl_wr),
 	.ioctl_download(ioctl_download),
 	.ioctl_index(ioctl_index),
+	.ioctl_wait(ioctl_wait),
 
 	.img_mounted(img_mounted),
 	.img_readonly(img_readonly),
@@ -319,8 +320,12 @@ reg [7:0] joy0_type, joy1_type, cart_region, cart_save;
 logic [15:0] cart_flags;
 logic [39:0] cart_header;
 logic [31:0] hcart_size, cart_size;
-logic [18:0] cart_addr;
+logic [24:0] cart_addr;
 logic [7:0] cart_xm;
+logic cart_busy;
+logic cart_read;
+logic [7:0] cart_data_sd;
+reg cart_loaded = 0;
 
 logic cart_is_7800;
 wire region_select = ~|status[16:15] ? cart_region[0] : (status[16] ? 1'b1 : 1'b0);
@@ -353,7 +358,8 @@ Atari7800 main
 
 	// Cart Interface
 	.cart_sel     (cart_sel),
-	.cart_out     (cart_data),
+	.cart_out     (cart_loaded ? cart_data_sd : cart_data),
+	.cart_read    (cart_read),
 	.cart_size    (cart_is_7800 ? hcart_size : cart_size),
 	.cart_addr_out(cart_addr),
 	.cart_flags   (cart_is_7800 ? cart_flags[15:0] : 16'd0),
@@ -386,7 +392,7 @@ Atari7800 main
 	.sc           (sc)
 );
 
-
+//assign ioctl_wait = cart_download && cart_busy;
 ////////////////////////////  MEMORY  ///////////////////////////////////
 wire [3:0] force_bs;
 wire sc;
@@ -401,8 +407,6 @@ detect2600 detect2600
 	.sc(sc)
 );
 
-
-//wire cart_is_7800 = ~|ioctl_index[7:6];
 initial begin
 	cart_header = "ATARI";
 	hcart_size = 32'h00008000;
@@ -416,6 +420,8 @@ always_ff @(posedge clk_sys) begin
 	logic old_cart_download;
 	logic [24:0] old_addr;
 	cart_is_7800 <= (cart_header == "ATARI");
+	if (cart_download)
+		cart_loaded <= 1;
 
 	old_cart_download <= cart_download;
 	if (old_cart_download & ~cart_download)
@@ -443,19 +449,19 @@ always_ff @(posedge clk_sys) begin
 	end
 end
 
-logic [17:0] cart_write_addr, fixed_addr;
-assign cart_write_addr = (ioctl_addr >= 8'd128) && cart_is_7800 ? (ioctl_addr[17:0] - 8'd128) : ioctl_addr[17:0];
+logic [24:0] cart_write_addr, fixed_addr;
+assign cart_write_addr = (ioctl_addr >= 8'd128) && cart_is_7800 ? (ioctl_addr[24:0] - 8'd128) : ioctl_addr[24:0];
 
 spram #(
-	.addr_width(18),
+	.addr_width(14),
 	.mem_name("Cart"),
 	.mem_init_file("mem0.mif")
 ) cart // FIXME: this needs to be 19 bits!
 (
 	.address (cart_download ? cart_write_addr : cart_addr),
 	.clock   (clk_sys),
-	.data    (ioctl_dout),
-	.wren    (ioctl_wr & cart_download),
+	.data    (),
+	.wren    (),
 	.q       (cart_data)
 );
 
@@ -467,6 +473,39 @@ spram #(.addr_width(12), .mem_name("BIOS")) bios
 	.data    (ioctl_dout),
 	.wren    (ioctl_wr & bios_download),
 	.q       (bios_data)
+);
+
+
+sdram sdram
+(
+	.*,
+
+	// system interface
+	.clk        ( clk_vid         ),
+	.init       ( !clock_locked   ),
+
+	// cpu/chipset interface
+	.ch0_addr   (cart_download ? cart_write_addr : cart_addr),
+	.ch0_wr     (ioctl_wr & cart_download),
+	.ch0_din    (ioctl_dout),
+	.ch0_rd     (cart_read),
+	.ch0_dout   (cart_data_sd),
+	.ch0_busy   (cart_busy),
+
+	.ch1_addr   (  ),
+	.ch1_wr     (  ),
+	.ch1_din    (  ),
+	.ch1_rd     (  ),
+	.ch1_dout   (  ),
+	.ch1_busy   ( ),
+
+	// reserved for backup ram save/load
+	.ch2_addr   ( ),
+	.ch2_wr     (  ),
+	.ch2_din    (  ),
+	.ch2_rd     (  ),
+	.ch2_dout   (  ),
+	.ch2_busy   (  )
 );
 
 //////////////////////////////  IO  /////////////////////////////////////
@@ -543,7 +582,7 @@ wire       scandoubler = (scale || forced_scandoubler);
 reg ce_pix;
 
 always @(posedge CLK_VIDEO) begin : pix_div
-	reg [1:0] div;
+	reg [2:0] div;
 	div <= div + 1'd1;
 	ce_pix <= !div;
 end

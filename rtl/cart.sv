@@ -11,6 +11,7 @@ module cart
 	input  logic        pclk1,
 	input  logic [15:0] address_in,
 	input  logic [7:0]  din,
+	input  logic        halt_n,
 	input  logic [7:0]  rom_din,
 	input  logic [15:0] cart_flags,
 	input  logic [31:0] cart_size,
@@ -23,13 +24,14 @@ module cart
 	input  logic  [7:0] cart_xm,
 
 	output logic [7:0]  dout,
+	output logic        cart_read,
 	output logic [15:0] pokey_audio,
 	output logic [15:0] ym_audio_r,
 	output logic [15:0] ym_audio_l,
-	output logic [18:0] rom_address
+	output logic [24:0] rom_address
 );
 
-logic [4:0] bank_reg;
+logic [7:0] bank_reg;
 logic [7:0] ram_dout;
 logic [7:0] ym_dout;
 logic [7:0] hsc_rom_dout;
@@ -37,80 +39,86 @@ logic [7:0] hsc_ram_dout;
 
 logic rom_cs, ram_cs, pokey_cs, ym_cs;
 logic [2:0] hardware_map[8];
-logic [4:0] bank_map[8];
+logic [7:0] bank_map[8];
 logic [2:0] bank_type; // 00 = Supergame, 01 = Activision, 02 = none 03 = absolute
 logic [31:0] address_offset;
 logic [2:0] cart_cs_reg, cart_cs_reg_m;
-logic [3:0] bank_mask;
+logic [7:0] bank_mask;
 logic [13:0] ram_mask;
-logic [7:0] XCTRL1, XCTRL2, XCTRL3, XCTRL4, XCTRL5;
+logic [7:0] XCTRL1, XCTRL2, XCTRL3, XCTRL4, XCTRL5; // 2-5 currently unused
+logic [24:0] old_rom_address;
+logic souper_ram_cs;
+logic [24:0] souper_addr;
+wire souper_en = cart_flags[12];
+logic [11:0] souper_bank;
 
 wire XCTRL1_cs = (cart_xm[0] && address_in[15:4] == 8'h47) && cart_cs;
 always @(posedge clk_sys) begin
+	old_rom_address <= rom_address;
+	cart_read <= rw && cart_cs;
 	if (reset) begin
 		{XCTRL1, XCTRL2, XCTRL3, XCTRL4, XCTRL5} <= 0;
 	end else if (pclk0) begin
 		if (XCTRL1_cs && ~rw)
 		case (address_in[3:0]) // FIXME: ATM there seems not much reason to support anything more than ctrl1
 			4'h0: XCTRL1 <= din;
-			4'h8: XCTRL2 <= din;
-			4'hC: XCTRL3 <= din;
-			4'h1: XCTRL4 <= din;
-			4'h2: XCTRL5 <= din;
+			// 4'h8: XCTRL2 <= din;
+			// 4'hC: XCTRL3 <= din;
+			// 4'h1: XCTRL4 <= din;
+			// 4'h2: XCTRL5 <= din;
 		endcase
 	end
-
 end
 
-wire [4:0] highest_bank = cart_size[18:14];
 
+wire is_9b = cart_flags[3];
+wire [7:0] highest_bank = (8'hFF & bank_mask) + is_9b;
+wire [7:0] second_highest_bank = is_9b ? 8'd0 : (8'hFE & bank_mask);
+wire [7:0] sg_bank = (bank_reg & bank_mask) + is_9b;
 always_ff @(posedge clk_sys) if (pclk1) begin
 	hardware_map <= '{3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0, 3'd0};
-	bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0};
+	bank_map <= '{8'd0, 8'd0, 8'd0, 8'd0, 8'd0, 8'd0, 8'd0, 8'd0};
 	bank_type <= 3'd0;
 	address_offset <= 32'd0;
-	bank_mask <= 4'b1111;
+	bank_mask <= 8'b11111111;
 	ram_mask <= '1;
 
 	// Banking mode selector
 	if (cart_flags[8]) begin                                   // Activision
 		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
-		bank_map <= '{4'd0, 4'd0, 4'd13, 4'd12, 4'd15, 4'd0, 4'd0, 4'd14};
+		bank_map <= '{8'd0, 8'd0, 8'd13, 8'd12, 8'd15, 8'd0, 8'd0, 8'd14};
 		bank_map[5] <= {bank_reg[2:0], 1'b0};
 		bank_map[6] <= {bank_reg[2:0], 1'b1};
 		bank_type <= 3'd1;
 	end else if (cart_flags[9]) begin                           // Absolute
 		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
-		bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd2, 4'd2, 4'd3, 4'd3};
+		bank_map <= '{8'd0, 8'd0, 8'd0, 8'd0, 8'd2, 8'd2, 8'd3, 8'd3};
 		bank_map[2] <= {3'b000, bank_reg[1]};
 		bank_map[3] <= {3'b000, bank_reg[1]};
 		bank_type <= 3'd3;
-	// end else if (cart_flags[3] /*|| cart_size == 32'h24000*/) begin  // SuperGame 9 bank
-	// 	hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
-	// 	bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd1, 4'd1, 4'd8, 4'd8};
-	// 	bank_map[4] <= bank_reg[3:0] + 1'd1;
-	// 	bank_map[5] <= bank_reg[3:0] + 1'd1;
-	// 	bank_type <= 3'd0;
+	end else if (cart_flags[12]) begin                           // Souper
+		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
+		//bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd4};
+		bank_type <= 3'd4;
 	end else if (cart_flags[1] || cart_size >= 32'h10000) begin // SuperGame
 		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
-		bank_map <= '{4'd0, 4'd0, 4'd6, 4'd6, 4'd0, 4'd0, highest_bank - 1'd1, highest_bank - 1'd1};
-		if (cart_flags[3]) begin
-			bank_map[2] <= 0;
-			bank_map[3] <= 0;
-			bank_map[4] <= 1;
-			bank_map[5] <= 1;
-		end
-		bank_map[4] <= bank_reg[3:0] + (cart_flags[3] ? 1'd1 : 1'd0);
-		bank_map[5] <= bank_reg[3:0] + (cart_flags[3] ? 1'd1 : 1'd0);
-		if (cart_size < 20'h30000)
-			bank_mask <= 5'b11111;
-		else if (cart_size < 20'h20000)
-			bank_mask <= 5'b01111;
-		else if (cart_size < 20'h10000)
-			bank_mask <= 5'b00111;
+		bank_map <= '{8'd0, 8'd0, second_highest_bank, second_highest_bank, 8'd0, 8'd0, highest_bank, highest_bank};
+		bank_map[4] <= sg_bank;
+		bank_map[5] <= sg_bank;
+		if (cart_size[22])
+			bank_mask <= 8'b11111111;
+		else if (cart_size[21])
+			bank_mask <= 8'b01111111;
+		else if (cart_size[20])
+			bank_mask <= 8'b00111111;
+		else if (cart_size[19])
+			bank_mask <= 8'b00011111;
+		else if (cart_size[18])
+			bank_mask <= 8'b00001111;
+		else if (cart_size[17])
+			bank_mask <= 8'b00000111;
 		else
-			bank_mask <= 5'b00011;
-		//bank_mask <= (cart_size == 32'h10000) ? 4'b0011 : 4'b0111; // 64k carts have 4 banks mirrored
+			bank_mask <= 8'b00000011;
 		bank_type <= 3'd0;
 	end else begin                                     // Not banked
 		if (cart_size <= 32'h2000) // A7808
@@ -184,7 +192,7 @@ always_comb begin
 	pokey_cs = 0;
 	ram_cs = 0;
 	ym_cs = 0;
-	rom_address = 19'd0;
+	rom_address = 25'd0;
 	if (is_pokey_450)
 		pokey_cs = 1;
 	else if (is_pokey_440)
@@ -202,16 +210,19 @@ always_comb begin
 		3'd4: begin           // Banked ROM
 			case (bank_type)
 				3'd0: // SuperGame
-					rom_address = {(bank_map[address_index] & bank_mask), address_in[13:0]};
+					rom_address = {bank_map[address_index], address_in[13:0]};
 				3'd1: // Activision
 					rom_address = {1'b0, bank_map[address_index], address_in[12:0]};
 				3'd2: // No banking
 					rom_address = {3'b000, address_in - address_offset[15:0]};
 				3'd3: // Absolute
 					rom_address = {bank_map[address_index], address_in[13:0]};
+				3'd4: // souper
+					rom_address = souper_addr;
+				default: ;
 		endcase
 		end
-		//default: // High impedance
+		default: ;
 	endcase
 end
 
@@ -226,10 +237,10 @@ end
 
 always_ff @(posedge clk_sys) begin
 	if (reset) begin
-		bank_reg <= 5'd0;
+		bank_reg <= 8'd0;
 	end else if (~rw & cart_cs & pclk0) begin
 		if (bank_type == 3'd0 && address_in[15:14] == 2'b10) //supergame bank
-			bank_reg <= din[4:0];
+			bank_reg <= din;
 		else if (bank_type == 3'd1 && (address_in[15:4]) == 12'hFF8) // activision bank
 			bank_reg <= address_in[3:0];
 		else if (bank_type == 3'd3 && address_in[15]) // Absolute
@@ -240,9 +251,9 @@ end
 spram #(.addr_width(14)) cart_ram
 (
 	.clock   (clk_sys),
-	.address (address_in[13:0] & ram_mask),
+	.address (souper_en ? souper_addr : (address_in[13:0] & ram_mask)),
 	.data    (din),
-	.wren    (~rw & ram_cs & pclk0),
+	.wren    ((~rw & ram_cs & pclk0) || (souper_ram_cs && souper_en && ~super_wr)),
 	.q       (ram_dout),
 	.cs      (1)
 );
@@ -256,7 +267,7 @@ spram #(.addr_width(14)) cart_ram
 always_comb begin
 	case(hardware_map[address_index])
 		3'd0: dout = 'Z;            // High Impedance
-		3'd1, 3'd4: dout = rom_din;       // ROM Data
+		3'd1, 3'd4: dout = rom_din; // ROM Data
 		3'd2: dout = pokey4k_dout;  // POKEY
 		3'd3: dout = ram_dout;      // RAM Data
 		default: dout = 'Z;
@@ -271,6 +282,13 @@ always_comb begin
 		dout = hsc_ram_dout;
 	if (XCTRL1_cs && rw)
 		dout = XCTRL1;
+	if (souper_en) begin
+		if (souper_ram_cs)
+			dout = ram_dout;
+		else
+			dout = rom_din;
+	end
+
 end
 
 logic pokey4k_dout;
@@ -371,6 +389,37 @@ spram #(.addr_width(11), .mem_name("HSCR")) hsc_ram
 	.data    (din),
 	.wren    (~rw & hsc_ram_cs & pclk0),
 	.q       (hsc_ram_dout)
+);
+
+logic souper_rom_cs;
+logic souper_wr;
+assign souper_addr = {souper_bank, address_in[6:0]};
+
+souper soup_soup (
+	.clk_phi2(pclk0), // FIXME create ce's
+	.reset_n(~reset),
+	.halt_n(halt_n),
+	.data(din),
+	.rw(rw),
+	.addr_15(address_in[15]),
+	.addr_14(address_in[14]),
+	.addr_13(address_in[13]),
+	.addr_12(address_in[12]),
+	.addr_11(address_in[11]),
+	.addr_10(address_in[10]),
+	.addr_9(address_in[9]),
+	.addr_8(address_in[8]),
+	.addr_7(address_in[7]),
+	.addr_2(address_in[2]),
+	.addr_1(address_in[1]),
+	.addr_0(address_in[0]),
+	.romSel_n(souper_rom_cs),
+	.ramSel_n(souper_ram_cs),
+	.oe_n(),
+	.wr_n(souper_wr),
+	.mapAddr_7p(souper_bank),
+	.audCom(),
+	.audReq_n()
 );
 
 endmodule: cart

@@ -26,9 +26,10 @@ input logic         tia_mode,
 output logic        cart_sel, bios_sel,
 input  logic        cart_region,
 input  logic [7:0]  cart_xm,
+output logic        cart_read,
 input  logic [7:0]  cart_out, bios_out,
 output logic [15:0] AB,
-output logic [18:0] cart_addr_out,
+output logic [24:0] cart_addr_out,
 input  logic [15:0] cart_flags,
 input  logic  [7:0] cart_save,
 input  logic [31:0] cart_size,
@@ -120,6 +121,8 @@ input logic sc
 	//CS LOGIC
 	logic ram0_cs, ram1_cs, bios_cs, tia_cs, riot_cs, cart_cs, riot_ram_cs;
 
+	(* preserve *) reg tia_clk_gen;
+
 	always_comb begin
 		ram0_cs = 1'b0;
 		ram1_cs = 1'b0;
@@ -190,6 +193,7 @@ input logic sc
 	// MARIA
 	maria maria_inst(
 		.mclk0           (mclk0),
+		.mclk1           (mclk1),
 		.halt_unlock     (ctrl_writes == 2),
 		.AB_in           (AB),
 		.AB_out          (maria_AB_out),
@@ -233,7 +237,7 @@ input logic sc
 	`ifdef OLD_TIA
 
 	tia tia_inst (
-		.clk           (clk_tia),
+		.clk           (tia_clk),
 		.master_reset  (reset),
 		.pix_ref       (),
 		.sys_rst       (),
@@ -429,8 +433,10 @@ ctrl_reg ctrl
 	.tia_mode     (tia_mode)
 );
 
+wire cart_read_flag;
+assign cart_read = cart_read_flag & mclk1;
 
-logic [17:0] cart_2600_addr_out,cart_7800_addr_out;
+logic [24:0] cart_2600_addr_out,cart_7800_addr_out;
 logic [7:0] cart_2600_DB_out , cart_7800_DB_out;
 
 assign cart_addr_out = tia_mode ? cart_2600_addr_out : cart_7800_addr_out;
@@ -441,6 +447,7 @@ cart cart
 	.clk_sys    (clk_sys),
 	.pclk0      (pclk0),
 	.pclk1      (pclk1),
+	.halt_n     (halt_b),
 	.dma_read   (dma_en),
 	.reset      (reset),
 	.address_in (AB[15:0]),
@@ -451,6 +458,7 @@ cart cart
 	.cart_save  (cart_save),
 	.cart_cs    (cart_cs),
 	.cart_xm    (cart_xm),
+	.cart_read  (cart_read_flag),
 	.hsc_en     (hsc_en),
 	.rw         (RW),
 	.dout       (cart_7800_DB_out),

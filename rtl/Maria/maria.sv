@@ -2,6 +2,7 @@
 
 module maria(
 	output logic        mclk0,
+	output logic        mclk1,
 	input  logic        halt_unlock,
 	input  logic [15:0] AB_in,
 	output logic [15:0] AB_out,
@@ -94,7 +95,6 @@ module maria(
 
 	logic deassert_ready;	
 	logic [3:0] reset_delay;
-	logic mclk1;
 	logic border;
 	logic prst;
 	logic vbe;
@@ -125,6 +125,7 @@ module maria(
 	wire PCLKEDGE = clock_div == 1 && pclk_toggle;
 	assign mclk0 = clk_toggle;
 	assign mclk1 = ~clk_toggle;
+	assign tia_clk = clk_toggle;
 
 	always @(posedge clk_sys) begin
 		if (reset) begin

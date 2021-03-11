@@ -276,8 +276,8 @@ begin
 --		cpu_d_out <= "ZZZZZZZZ";
 	elsif (cpu_a(12) = '1') then
 		cpu_d_out <= rom_do;
---	else
---		cpu_d_out <= "ZZZZZZZZ";
+	else
+		cpu_d_out <= "00000000";
 	end if;
 end process;
 

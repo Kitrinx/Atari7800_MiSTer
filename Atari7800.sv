@@ -458,7 +458,7 @@ spram #(
 	.mem_init_file("mem0.mif")
 ) cart // FIXME: this needs to be 19 bits!
 (
-	.address (cart_download ? cart_write_addr : cart_addr),
+	.address (cart_addr),
 	.clock   (clk_sys),
 	.data    (),
 	.wren    (),

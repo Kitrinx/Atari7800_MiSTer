@@ -110,7 +110,7 @@ localparam RESET_PRST = 418; // wtf is this
 localparam VSYNC_END = 3;
 localparam VSYNC_START = 0;
 localparam VBLANK_START = 258;
-localparam VBLANK_START_PAL = 309;
+localparam VBLANK_START_PAL = 308;
 localparam VBLANK_END = 16;
 
 assign VSync      = (row < VSYNC_END);
@@ -121,7 +121,7 @@ assign hblank     = hide_border ? border : ((col >= HBLANK_START) || (col < HBLA
 assign border     = (col >= BORDER_START) || (col < BORDER_END);
 assign visible    = ~(vblank | hblank);
 assign lrc        = (col == LINE_RESET_COUNT);
-assign vbe        = (row == VBLANK_END) && (col == 0);
+assign vbe        = (row == VBLANK_END) && (col == 1);
 assign hbs        = col == HBLANK_START;
 assign prst       = col == RESET_PRST;
 

@@ -96,6 +96,7 @@ input logic sc
 
 	logic cpu_reset, core_halt_b;
 	logic [2:0] cpu_reset_counter;
+	logic halt_active;
 
 	assign IRQ_n = 1'b1;
 
@@ -237,7 +238,7 @@ input logic sc
 	`ifdef OLD_TIA
 
 	tia tia_inst (
-		.clk           (tia_clk),
+		.clk           (clk_tia),
 		.master_reset  (reset),
 		.pix_ref       (),
 		.sys_rst       (),
@@ -370,25 +371,44 @@ input logic sc
 	assign AUDIO_L = audio_lut[aud_index] + pokey_audio + ym_audio_l;
 
 //RIOT
-riot RIOT (
-	.clk          (clk_sys),
-	.reset        (reset),
-	.go_clk       (pclk1),
-	.go_clk_180   (pclk0),
-	.port_a_in    (PAin),
-	.port_a_out   (PAout),
-	.port_a_ctl   (),
-	.port_b_in    (PBin),
-	.port_b_out   (PBout),
-	.port_b_ctl   (),
-	.addr         (AB[6:0]),
-	.din          (write_DB),
-	.dout         (riot_DB_out),
-	.rwn          (RW),
-	.ramsel_n     (~riot_ram_cs),
-	.cs1          (riot_cs),
-	.cs2n         (~riot_cs),
-	.irqn         ()
+// riot RIOT (
+// 	.clk          (clk_sys),
+// 	.reset        (reset),
+// 	.go_clk       (pclk1),
+// 	.go_clk_180   (pclk0),
+// 	.port_a_in    (PAin),
+// 	.port_a_out   (PAout),
+// 	.port_a_ctl   (),
+// 	.port_b_in    (PBin),
+// 	.port_b_out   (PBout),
+// 	.port_b_ctl   (),
+// 	.addr         (AB[6:0]),
+// 	.din          (write_DB),
+// 	.dout         (riot_DB_out),
+// 	.rwn          (RW),
+// 	.ramsel_n     (~riot_ram_cs),
+// 	.cs1          (riot_cs),
+// 	.cs2n         (~riot_cs),
+// 	.irqn         ()
+// );
+
+M6532 #(.init_7800(1)) riot_inst_2
+(
+	.clk(clk_sys), // PHI 2
+	.ce(pclk0),  // Clock enable
+	.res_n(~reset), // reset
+	.addr(AB[6:0]), // Address
+	.RW_n(RW), // 1 = read, 0 = write
+	.d_in(write_DB),
+	.d_out(riot_DB_out),
+	.RS_n(~riot_ram_cs), // RAM select
+	.IRQ_n(),
+	.CS1(riot_cs), // Chip select 1, 1 = selected
+	.CS2_n(~riot_cs),// Chip select 2, 0 = selected
+	.PA_in(PAin),
+	.PA_out(PAout),
+	.PB_in(PBin),
+	.PB_out(PBout)
 );
 
 // CPU
@@ -410,7 +430,8 @@ M6502C cpu_inst
 	.IRQ     (~IRQ_n),
 	.NMI     (CPU_NMI),
 	.RDY     (RDY),
-	.halt_b  (core_halt_b)
+	.halt_b  (core_halt_b || (ctrl_writes < 2)),
+	.is_halted (halt_active)
 );
 
 assign ld[6] = tia_en;
@@ -526,6 +547,8 @@ always_ff @(posedge clk) begin
 end
 endmodule
 
+
+
 module M6502C
 (
 	input pclk1,         // CPU clock (Phi0)
@@ -538,8 +561,11 @@ module M6502C
 	input IRQ,              // interrupt request
 	input NMI,              // non-maskable interrupt request
 	input RDY,              // Ready signal. Pauses CPU when RDY=0
-	input halt_b            // halt!
+	input halt_b,           // halt!
+	output is_halted        // This is used to indicate that sally has released the bus
 );
+
+logic cpu_halt_n = 0;
 
 T65 cpu (
 	.mode (0),
@@ -547,7 +573,7 @@ T65 cpu (
 
 	.Res_n(~reset),
 	.Clk(clk_sys),
-	.Enable(pclk1),
+	.Enable(pclk1 && cpu_halt_n),
 	.Rdy(RDY),
 
 	.IRQ_n(~IRQ),
@@ -557,5 +583,15 @@ T65 cpu (
 	.DI(RD ? DB_IN : DB_OUT),
 	.DO(DB_OUT)
 );
+
+assign is_halted = ~cpu_halt_n;
+
+always @(posedge clk_sys) begin
+	if (reset) begin
+		cpu_halt_n <= 1;
+	end else if (pclk1) begin
+		cpu_halt_n <= halt_b;
+	end
+end
 
 endmodule: M6502C

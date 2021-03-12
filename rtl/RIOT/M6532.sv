@@ -92,7 +92,11 @@ always_ff @(posedge clk) if (~res_n) begin
 	else
 		riot_ram <= '{128{8'h00}};
 
-	{out_a, out_b, dir_a, dir_b, interrupt, irq_en, edge_detect} <= '0;
+	out_a <= 8'hFF;
+	out_b <= 8'hFF;
+	dir_a <= 8'h00;
+	dir_b <= 8'h00;
+	{interrupt, irq_en, edge_detect} <= '0;
 	time_incr <= 2'b10; // Increment resets to 64
 	timer <= 8'hFF;   // Timer resets to FF
 	cycle_count <= 0;

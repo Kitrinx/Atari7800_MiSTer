@@ -46,7 +46,8 @@ typedef enum logic [4:0] {
 	DMA_WAIT_DP,
 	DMA_START_ZP,
 	DMA_START_DP,
-	DMA_HOLEY_COOLDOWN
+	DMA_HOLEY_COOLDOWN,
+	DMA_END_ZP
 } DMA_STATE;
 
 
@@ -99,6 +100,7 @@ logic vbe_latch;
 logic width_ovr;
 logic shutting_down;
 logic [9:0] cycles_elapsed;
+logic [3:0] halt_cnt;
 
 always_ff @(posedge clk_sys) if (reset) begin
 	state <= DMA_WAIT_ZP;
@@ -127,9 +129,13 @@ end else if (mclk0) begin
 	cycles_elapsed <= cycles_elapsed + 1'd1;
 	if (hbs) begin
 		hbs_latch <= 1;
+		if (dma_en && ~vblank)
+			HALT <= 1;
 		cycles_elapsed <= 0;
 	end
 	if (vbe) begin
+		if (dma_en)
+		HALT <= 1;
 		vbe_latch <= 1;
 		cycles_elapsed <= 0;
 	end
@@ -137,20 +143,20 @@ end else if (mclk0) begin
 		// Wait for starting condition
 		DMA_WAIT_ZP: begin
 			if (pclk1) begin
-				hbs_latch <= 0;
-				//if ((hbs || hbs_latch)) begin
-					vbe_latch <= 0;
-					if ((vbe || vbe_latch) && dma_en) begin
-						substate <= 0;
-						ZONE_PTR <= ZP;
-						AddrB <= ZP;
-						shutting_down <= 1;
-						state <= DMA_START_ZP;
-						drive_AB <= 1;
-						HALT <= 1;
-						DLI <= 0;
-					end
-				//end
+				if ((HALT || (vbe & dma_en)))
+					halt_cnt <= halt_cnt + 1'd1;
+				else
+					halt_cnt <= 0;
+				if (halt_cnt == 1) begin
+					substate <= 0;
+					ZONE_PTR <= ZP;
+					AddrB <= ZP;
+					shutting_down <= 1;
+					state <= DMA_START_ZP;
+					drive_AB <= 1;
+					HALT <= 1;
+					DLI <= 0;
+				end
 			end
 		end
 
@@ -160,9 +166,11 @@ end else if (mclk0) begin
 			if (vblank)
 				state <= DMA_WAIT_ZP;
 			if (pclk1) begin
-				vbe_latch <= 0;
-				hbs_latch <= 0;
-				if ((hbs || hbs_latch) && dma_en) begin
+				if (HALT || (hbs & dma_en))
+					halt_cnt <= halt_cnt + 1'd1;
+				else
+					halt_cnt <= 0;
+				if (halt_cnt == 1) begin
 					drive_AB <= 1;
 					substate <= 0;
 					AddrB <= DP;
@@ -177,7 +185,7 @@ end else if (mclk0) begin
 
 		DMA_START_ZP:begin
 			substate <= substate + 1'd1;
-			if (cycles_elapsed + substate >= 15) begin
+			if (substate >= 2) begin
 				substate <= 0;
 				state <= DMA_ZONE_END_0;
 			end
@@ -185,7 +193,7 @@ end else if (mclk0) begin
 
 		DMA_START_DP:begin
 			substate <= substate + 1'd1;
-			if (cycles_elapsed + substate >= 15) begin
+			if (substate >= 3) begin
 				substate <= 0;
 				state <= DMA_HEADER_0;
 			end
@@ -194,7 +202,11 @@ end else if (mclk0) begin
 		DMA_HOLEY_COOLDOWN:begin
 			substate <= substate + 1'd1;
 			case (substate)
-				3:begin
+				2: if (!IND) begin
+					substate <= 0;
+					state <= DMA_HEADER_0;
+				end
+				5: begin
 					substate <= 0;
 					state <= DMA_HEADER_0;
 				end
@@ -229,7 +241,18 @@ end else if (mclk0) begin
 					// Maria apparently only checks 0x5F as a bit pattern
 					// for end-of-zone markers, not for 0.
 					if (~DataB[6] && ~|DataB[4:0]) begin// End of line
-						state <= OFFSET ? DMA_END : DMA_ZONE_END_0;
+						state <= DMA_ZONE_END_0;
+						if (OFFSET) begin
+							if (pclk1) begin
+								HALT <= 0;
+								OFFSET <= OFFSET - 1'd1;
+								state <= DMA_WAIT_DP;
+								latch_byte <= 0;
+								substate <= 0;
+								drive_AB <= 0;
+							end else
+								state <= DMA_END;
+						end
 						shutting_down <= 1;
 					end else if (~|DataB[4:0]) begin/// Long header
 						LONGHDR <= 1;
@@ -361,20 +384,24 @@ end else if (mclk0) begin
 
 		// Decrement offset and terminate DMA
 		DMA_END: begin
-			// substate <= substate + 1'd1;
-			// case (substate)
-			// 	0: drive_AB <= 0;
-			// 	// 1: wait
-			// 	1: begin
-					drive_AB <= 0;
-					HALT <= 0;
-					OFFSET <= OFFSET - 1'd1;
-					state <= DMA_WAIT_DP;
-					latch_byte <= 0;
-					substate <= 0;
-					drive_AB <= 0;
-			// 	end
-			// endcase
+			if (pclk1) begin
+				HALT <= 0;
+				OFFSET <= OFFSET - 1'd1;
+				state <= DMA_WAIT_DP;
+				latch_byte <= 0;
+				substate <= 0;
+				drive_AB <= 0;
+			end
+		end
+
+		DMA_END_ZP: begin
+			if (pclk1) begin
+				HALT <= 0;
+				state <= DMA_WAIT_DP;
+				latch_byte <= 0;
+				substate <= 0;
+				drive_AB <= 0;
+			end
 		end
 
 		// Fetch DL header
@@ -414,12 +441,16 @@ end else if (mclk0) begin
 				1: begin
 					ZONE_PTR <= ZONE_PTR + 1'd1;
 					DP[7:0] <= DataB;
-					drive_AB <= 0;
 				// end
 				// 2: begin
-					HALT <= 0;
-					state <= DMA_WAIT_DP;
-					substate <= 0;
+					if (pclk1) begin
+						HALT <= 0;
+						state <= DMA_WAIT_DP;
+						latch_byte <= 0;
+						substate <= 0;
+						drive_AB <= 0;
+					end else
+						state <= DMA_END_ZP;
 				end
 			endcase
 		end

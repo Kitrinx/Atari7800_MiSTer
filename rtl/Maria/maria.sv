@@ -51,7 +51,7 @@ module maria(
 	output logic        ready
 );
 
-	assign halt_b = ~halt_en;
+	assign halt_b = ~halt_en && ~((vbe || hbs) & dma_en);
 
 	/* Original Pins:
 		A0-A15        memory address bus
@@ -117,7 +117,8 @@ module maria(
 	logic old_ssc;
 
 	// Normally this would be one cpu cycle, but T65 appears to
-	// need this low for two cpu cycles to take action.
+	// need this low for two cpu cycles to take action. It's edge triggered
+	// so c'est la vie, won't cause problems.
 	assign int_b = ~(edge_counter == 1 || edge_counter == 2);
 
 	wire dma_en = (ctrl[6:5] == 2'b10);
@@ -148,7 +149,7 @@ module maria(
 				edge_counter <= 0;
 			end
 
-			if (pclk0)
+			if (pclk0 && halt_b)
 				cpu_ticks <= cpu_ticks + 1'd1;
 			if (mclk0) begin
 				if (halt_en) halted_ticks <= halted_ticks + 1'd1;
@@ -161,7 +162,7 @@ module maria(
 			end
 
 
-			if (pclk1) begin
+			if (pclk1 && halt_b) begin
 				if (~&edge_counter && dli_latch)
 					edge_counter <= edge_counter + 1'd1;
 				if (edge_counter == 3)
@@ -177,23 +178,19 @@ module maria(
 			pclk1 <= 0;
 
 			if (mclk1) begin
-				if (~(halt_en & halt_unlock)) begin
-					old_ssc <= sel_slow_clock;
-					if (clock_div)
-						clock_div <= clock_div - 1'd1;
-					else begin
-						pclk_toggle <= ~pclk_toggle;
-						pclk1 <= ~pclk_toggle;
-						pclk0 <= pclk_toggle;
-						clock_div <= sel_slow_clock ? 3'd2 : 2'd1;
-					end
-					if (old_ssc != sel_slow_clock) begin
-						// In theory this should only happen 1 cycle after pclk1
-						// when the addresses change.
-						clock_div <= sel_slow_clock ? 3'd1 : 2'd0;
-					end
-				end else begin
-					pclk0 <= 1;
+				old_ssc <= sel_slow_clock;
+				if (clock_div)
+					clock_div <= clock_div - 1'd1;
+				else begin
+					pclk_toggle <= ~pclk_toggle;
+					pclk1 <= ~pclk_toggle;
+					pclk0 <= pclk_toggle;
+					clock_div <= sel_slow_clock ? 3'd2 : 2'd1;
+				end
+				if (old_ssc != sel_slow_clock) begin
+					// In theory this should only happen 1 cycle after pclk1
+					// when the addresses change.
+					clock_div <= sel_slow_clock ? 3'd1 : 2'd0;
 				end
 			end
 		end

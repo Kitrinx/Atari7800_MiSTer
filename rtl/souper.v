@@ -139,12 +139,12 @@ always@(posedge clk) begin
 		haltDelA_ir <= 1'b0;
 		haltDelB_ir <= 1'b0;
 	end
-	else begin
+	else if (pclk1) begin
 		if(~halt_n) begin
 			haltDelA_ir <= ~halt_n;
 			haltDelB_ir <= haltDelA_ir;
 		end
-		else if (pclk1) begin
+		else begin
 			haltDelA_ir <= 1'b0;
 			haltDelB_ir <= 1'b0;
 		end

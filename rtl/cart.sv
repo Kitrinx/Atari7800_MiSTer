@@ -305,7 +305,7 @@ end
 assign pokey_audio = (cart_flags[0] || cart_flags[6] || cart_flags[10]) ? {pokey_mux, 10'd0} : 16'd0;
 pokey the_penguin (
 	.CLK                  (clk_sys),
-	.ENABLE_179           (!pokey_ce[2:0]),
+	.ENABLE_179           (pclk0),
 	.ADDR                 (address_in[3:0]),
 	.DATA_IN              (din),
 	.WR_EN                (~rw & pokey_cs),
@@ -337,7 +337,7 @@ pokey the_penguin (
 
 wire [15:0] ym_audio_lo, ym_audio_ro;
 
-jt51 ym2151 (
+jt51 ym2151 ( // FIXME: This clock is not exact
 	.rst      (reset),
 	.clk      (clk_sys),
 	.cen      (!pokey_ce[1:0]),
@@ -437,7 +437,8 @@ endmodule: cart
 //   bit 9    = absolute banking
 //   bit 10   = pokey at $440
 //   bit 11   = ym2151 at $460/$461
-//   bit 12-15 = special
+//   bit 12   = souper mapper
+//   bit 13-15 = special
 
 // controller type byte details:
 //   0 = none

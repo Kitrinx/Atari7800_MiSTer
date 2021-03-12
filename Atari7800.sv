@@ -222,7 +222,7 @@ always @(posedge clk_vid)
 
 
 wire cart_download = ioctl_download & (ioctl_index[5:0] == 6'd1);
-wire bios_download = ioctl_download & (ioctl_index[5:0] == 8'd0) && (ioctl_index[7:6] == 0);
+wire bios_download = ioctl_download & (ioctl_index[5:0] == 6'd0) && (ioctl_index[7:6] == 0);
 
 reg old_cart_download;
 
@@ -231,7 +231,7 @@ reg old_cart_download;
 // 0         1         2         3          4         5         6
 // 01234567890123456789012345678901 23456789012345678901234567890123
 // 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
-// X       XXXXXXXXXXXX
+// X       XXXXXXXXXXXXX
 
 `include "build_id.v"
 parameter CONF_STR = {
@@ -240,14 +240,15 @@ parameter CONF_STR = {
 	"O8,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"O9B,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"OE,Show Border,No,Yes;",
+	"OK,Composite Blending,No,Yes;",
 	"OFG,Region,Auto,NTSC,PAL;",
 	"OIJ,High Score Cart,Auto,On,Off;",
 	"-;",
 	"OH,Bypass Bios,Yes,No;",
 	"-;",
 	"O7,Swap Joysticks,No,Yes;",
-	"OC,Difficulty Right,Low,High;",
-	"OD,Difficulty Left,Low,High;",
+	"OC,Difficulty Right,Right,Left;",
+	"OD,Difficulty Left,Right,Left;",
 	"-;",
 	"R0,Reset;",
 	"J1,Fire1,Fire2,Pause,Select,Start,PU,PD;",
@@ -420,7 +421,7 @@ always_ff @(posedge clk_sys) begin
 	logic old_cart_download;
 	logic [24:0] old_addr;
 	cart_is_7800 <= (cart_header == "ATARI");
-	if (cart_download)
+	if (cart_download && ~status[0])
 		cart_loaded <= 1;
 
 	old_cart_download <= cart_download;
@@ -453,7 +454,7 @@ logic [24:0] cart_write_addr, fixed_addr;
 assign cart_write_addr = (ioctl_addr >= 8'd128) && cart_is_7800 ? (ioctl_addr[24:0] - 8'd128) : ioctl_addr[24:0];
 
 spram #(
-	.addr_width(14),
+	.addr_width(15),
 	.mem_name("Cart"),
 	.mem_init_file("mem0.mif")
 ) cart // FIXME: this needs to be 19 bits!
@@ -540,8 +541,8 @@ assign joyb = status[7] ? joy0 : joy1;
 // 7800: Bits PB 0,1,3,6,7 are used for reset, select, pause, left diff, right diff
 // 7800: Bits PB 2 & 4 are used for output to select 2 button mode.
 
-assign PBin[7] = status[13];              // Right diff
-assign PBin[6] = status[14];              // Left diff
+assign PBin[7] = ~status[13];              // Right diff
+assign PBin[6] = ~status[14];              // Left diff
 assign PBin[5] = 1'b1;                     // Unused
 assign PBin[4] = 1'b1;                     // 2600 B/W?
 assign PBin[3] = (~joya[6] & ~joyb[6]);    // Pause
@@ -552,13 +553,16 @@ assign PBin[0] = (~joya[8] & ~joyb[8]);    // Start/Reset
 assign PAin[7:4] = {~joya[0], ~joya[1], ~joya[2], ~joya[3]}; // P1: R L D U or PA PB 1 1
 assign PAin[3:0] = {~joyb[0], ~joyb[1], ~joyb[2], ~joyb[3]}; // P2: R L D U or PA PB 1 1
 
-assign ilatch[0] = /*joya_b2 ? 1'b1 :*/ ~(joya[4] || joya[5]); // P1 Fire
-assign ilatch[1] = /*joyb_b2 ? 1'b1 :*/ ~(joyb[4] || joyb[5]); // P2 Fire
+// In two button mode, pin 6 is pulled up strongly, and won't lower
+// In one button mode, it will lower if *either* pin 5 or 9 are pressed
+assign ilatch[0] = joya_b2 ? 1'b1 : ~(joya[4] || joya[5]); // P1 Fire
+assign ilatch[1] = joyb_b2 ? 1'b1 : ~(joyb[4] || joyb[5]); // P2 Fire
 
-wire pada_0 = joya_b2 ? joya[4] : joya[9];
-wire pada_1 = joya_b2 ? joya[5] : joya[10];
-wire padb_0 = joyb_b2 ? joyb[4] : joyb[9];
-wire padb_1 = joyb_b2 ? joyb[5] : joyb[10];
+// These will continue to weakly pull up when pressed, even in one button mode.
+wire pada_0 = joya[4];
+wire pada_1 = joya[5];
+wire padb_0 = joyb[4];
+wire padb_1 = joyb[5];
 
 //      4     5     6     7      8     9  10
 // 	"J1,Fire1,Fire2,Pause,Select,Start,PU,PD;",
@@ -567,8 +571,30 @@ assign idump = {padb_0, padb_1, pada_0, pada_1}; // // P2 F1, P2 F2, P1 F1, P1 F
 
 ////////////////////////////  VIDEO  ////////////////////////////////////
 
+logic hb_cofi, hs_cofi, vb_cofi, vs_cofi;
+logic [7:0] r_cofi, g_cofi, b_cofi;
+reg ce_pix;
 
+cofi coffee (
+	.clk        (CLK_VIDEO),
+	.pix_ce     (ce_pix),
+	.enable     (status[20]),
+	.hblank     (HBlank),
+	.vblank     (VBlank),
+	.hs         (HSync),
+	.vs         (VSync),
+	.red        (R),
+	.green      (G),
+	.blue       (B),
 
+	.hblank_out (hb_cofi),
+	.vblank_out (vb_cofi),
+	.hs_out     (hs_cofi),
+	.vs_out     (vs_cofi),
+	.red_out    (r_cofi),
+	.green_out  (g_cofi),
+	.blue_out   (b_cofi)
+);
 
 assign VGA_F1 = 1'b0;
 assign CLK_VIDEO = clk_vid;
@@ -578,8 +604,6 @@ wire [2:0] scale = status[11:9];
 wire [2:0] sl = scale ? scale - 1'd1 : 3'd0;
 wire       scandoubler = (scale || forced_scandoubler);
 
-//wire ce_pix = clk_sys;
-reg ce_pix;
 
 always @(posedge CLK_VIDEO) begin : pix_div
 	reg [2:0] div;
@@ -605,18 +629,36 @@ end
 // 	.SCALE(status[40:39])
 // );
 
-video_mixer video_mixer
+// video_mixer #(.LINE_LENGTH(336), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
+// (
+// 	.*,
+
+// 	.hq2x(scale==1),
+// //	.scanlines(0),
+// //	.mono(0),
+
+// 	.R(R),
+// 	.G(G),
+// 	.B(B)
+// );
+
+video_mixer #(.LINE_LENGTH(372), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
 (
 	.*,
 
 	.hq2x(scale==1),
 //	.scanlines(0),
 //	.mono(0),
+	.HSync(hs_cofi),
+	.HBlank(hb_cofi),
+	.VSync(vs_cofi),
+	.VBlank(vb_cofi),
 
-	.R(R),
-	.G(G),
-	.B(B)
+	.R(r_cofi),
+	.G(g_cofi),
+	.B(b_cofi)
 );
+
 
 
 

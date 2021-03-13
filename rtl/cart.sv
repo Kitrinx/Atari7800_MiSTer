@@ -1,7 +1,17 @@
+// (C) Jamie Blanks, 2021
 
-// Atari 7800 cart mapper support
-// (c) Jamie Blanks, 2021
-// For MiSTer use only
+// For MiSTer use only.
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 // Covers the bank switching, ram, and audio hardware from carts
 module cart
@@ -21,9 +31,11 @@ module cart
 	input  logic        rw, // Write low
 	input  logic        reset,
 	input  logic        hsc_en,
+	input  logic  [7:0] hsc_ram_din,
 	input  logic  [7:0] cart_xm,
 
 	output logic [7:0]  dout,
+	output logic        hsc_ram_cs,
 	output logic        cart_read,
 	output logic [15:0] pokey_audio,
 	output logic [15:0] ym_audio_r,
@@ -56,7 +68,7 @@ wire XCTRL1_cs = (cart_xm[0] && address_in[15:4] == 8'h47) && cart_cs;
 always @(posedge clk_sys) begin
 	cart_read <= rw && cart_cs;
 	if (reset) begin
-		{XCTRL1, XCTRL2, XCTRL3, XCTRL4, XCTRL5} <= 0;
+		XCTRL1 <= 0;
 	end else if (pclk0) begin
 		if (XCTRL1_cs && ~rw)
 		case (address_in[3:0]) // FIXME: ATM there seems not much reason to support anything more than ctrl1
@@ -133,10 +145,6 @@ always_ff @(posedge clk_sys) if (pclk1) begin
 	end
 
 	// Alternative hardware at $4k selector
-	/*if (cart_flags[0]) begin // POKEY at $4k
-		hardware_map[2] <= 3'd2;
-		hardware_map[3] <= 3'd2;
-	end else */
 	if (cart_flags[2]) begin // Supergame RAM at $4k
 		hardware_map[2] <= 3'd3;
 		hardware_map[3] <= 3'd3;
@@ -169,20 +177,7 @@ wire is_pokey_4k = ((cart_flags[0] && address_in[15:14] == 2'b01) && cart_cs);
 wire pokey4k_wo = cart_flags[0] && cart_flags[3];
 
 wire is_ym = (((cart_flags[11] || XCTRL1[7]) && address_in[15:1] == 15'h230) && cart_cs);
-	// end else if (cart_flags[3] /*|| cart_size == 32'h24000*/) begin  // SuperGame 9 bank
-	// 	hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
-	// 	bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd1, 4'd1, 4'd8, 4'd8};
-	// 	bank_map[4] <= bank_reg[3:0] + 1'd1;
-	// 	bank_map[5] <= bank_reg[3:0] + 1'd1;
-	// 	bank_type <= 3'd0;
-	// end else if (cart_flags[1] || cart_size >= 32'h10000) begin // SuperGame
-	// 	hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
-	// 	bank_map <= '{4'd0, 4'd0, 4'd6, 4'd6, 4'd0, 4'd0, 4'd7, 4'd7};
-	// 	bank_map[4] <= bank_reg[3:0];
-	// 	bank_map[5] <= bank_reg[3:0];
-	// 	bank_mask <= (cart_size == 32'h10000) ? 4'b0011 : 4'b0111; // 64k carts have 4 banks mirrored
-	// 	bank_type <= 3'd0;
-	// end else begin                                     // Not banked
+
 logic [2:0] address_index;
 assign address_index = address_in[15:13];
 
@@ -231,8 +226,6 @@ end
 //02 - POKEY
 //03 - RAM
 //04 - Banked ROM
-//m_bank_mask = (size / 0x4000) - 1
-//m_base_rom = 0x10000 - size;
 
 always_ff @(posedge clk_sys) begin
 	if (reset) begin
@@ -371,7 +364,7 @@ always @(posedge clk_sys) begin
 	end
 end
 
-wire hsc_ram_cs = address_in[15:11] == 5'd2 && hsc_en;
+assign hsc_ram_cs = address_in[15:11] == 5'd2 && hsc_en;
 wire hsc_rom_cs = address_in[15:12] == 4'd3 && hsc_en;
 
 spram #(.addr_width(12), .mem_name("HSC"), .mem_init_file("mem4.mif")) hsc_rom
@@ -381,14 +374,15 @@ spram #(.addr_width(12), .mem_name("HSC"), .mem_init_file("mem4.mif")) hsc_rom
 	.q       (hsc_rom_dout)
 );
 
-spram #(.addr_width(11), .mem_name("HSCR")) hsc_ram
-(
-	.address (address_in[10:0]),
-	.clock   (clk_sys),
-	.data    (din),
-	.wren    (~rw & hsc_ram_cs & pclk0),
-	.q       (hsc_ram_dout)
-);
+assign hsc_ram_dout = hsc_ram_din;
+// spram #(.addr_width(11), .mem_name("HSCR")) hsc_ram
+// (
+// 	.address (address_in[10:0]),
+// 	.clock   (clk_sys),
+// 	.data    (din),
+// 	.wren    (~rw & hsc_ram_cs & pclk0),
+// 	.q       (hsc_ram_dout)
+// );
 
 logic souper_rom_cs;
 assign souper_addr = {souper_bank, address_in[6:0]};

@@ -1,3 +1,18 @@
+// (C) Jamie Blanks, 2021
+
+// For MiSTer use only.
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
 `include "atari7800.vh"
 
 module maria(
@@ -21,6 +36,7 @@ module maria(
 	input logic         reset,
 	input logic         clk_sys, 
 	output logic        tia_clk, 
+	output logic        tia_cpu_clk,
 	output logic        sel_slow_clock, 
 
 	// Memory Map Select lines
@@ -41,6 +57,7 @@ module maria(
 	output logic        vsync,
 	output logic        hblank,
 	output logic        vblank,
+	output logic        vblank_ex,
 	output logic [12:0] cpu_ticks,
 	output logic [12:0] halted_ticks,
 	output logic [12:0] driven_ticks,
@@ -52,7 +69,7 @@ module maria(
 );
 
 	assign halt_b = ~halt_en && ~((vbe || hbs) & dma_en);
-
+	assign tia_cpu_clk = pclk_toggle;
 	/* Original Pins:
 		A0-A15        memory address bus
 		D0-D7         memory data bus
@@ -124,9 +141,9 @@ module maria(
 	wire dma_en = (ctrl[6:5] == 2'b10);
 
 	wire PCLKEDGE = clock_div == 1 && pclk_toggle;
-	assign mclk0 = clk_toggle;
-	assign mclk1 = ~clk_toggle;
-	assign tia_clk = clk_toggle;
+
+
+	logic [7:0] pal_counter;
 
 	always @(posedge clk_sys) begin
 		if (reset) begin
@@ -137,11 +154,32 @@ module maria(
 			clock_div <= 0;
 			clk_toggle <= 0;
 			pclk_toggle <= 0;
+			mclk1 <= 0;
+			mclk0 <= 0;
 			pclk0 <= 0;
 			pclk1 <= 0;
 			old_ssc <= 0;
 		end else begin
-			clk_toggle <= ~clk_toggle;
+			if (mclk1)
+				tia_clk <= 1;
+			else if (mclk0)
+				tia_clk <= 0;
+			if (PAL)
+				pal_counter <= pal_counter + 1'd1;
+			else
+				pal_counter <= 0;
+
+			mclk1 <= 0;
+			mclk0 <= 0;
+
+			if (pal_counter == 109)
+				pal_counter <= 0;
+			else begin
+				mclk0 <= clk_toggle;
+				mclk1 <= ~clk_toggle;
+				clk_toggle <= ~clk_toggle;
+			end
+
 			old_dli <= DLI_en;
 
 			if (~old_dli & DLI_en) begin
@@ -272,25 +310,26 @@ module maria(
 	);
 
 	video_sync sync (
-		.mclk0  (mclk0),
-		.mclk1  (mclk1),
-		.clk    (clk_sys),
-		.reset  (reset),
-		.uv_in  (UV_out),
-		.PAL    (PAL),
-		.RED    (red),
-		.GREEN  (green),
-		.BLUE   (blue),
-		.HSync  (hsync),
-		.VSync  (vsync),
-		.hblank (hblank),
-		.vblank (vblank),
-		.border (border),
+		.mclk0       (mclk0),
+		.mclk1       (mclk1),
+		.clk         (clk_sys),
+		.reset       (reset),
+		.uv_in       (UV_out),
+		.PAL         (PAL),
+		.RED         (red),
+		.GREEN       (green),
+		.BLUE        (blue),
+		.HSync       (hsync),
+		.VSync       (vsync),
+		.hblank      (hblank),
+		.vblank      (vblank),
+		.vblank_ex   (vblank_ex),
+		.border      (border),
 		.hide_border (hide_border),
-		.lrc    (lrc),
-		.prst   (prst),
-		.vbe    (vbe),
-		.hbs    (hbs)
+		.lrc         (lrc),
+		.prst        (prst),
+		.vbe         (vbe),
+		.hbs         (hbs)
 	);
 
 endmodule

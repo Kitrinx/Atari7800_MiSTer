@@ -1,11 +1,3 @@
-// Graphics Mode Definitions
-`define GM_160A 3'b000
-`define GM_160B 3'b100
-`define GM_320A 3'b011
-`define GM_320B 3'b110
-`define GM_320C 3'b111
-`define GM_320D 3'b010
-
 module line_ram(
 	input  logic               clk_sys, 
 	input  logic               RESET,
@@ -60,7 +52,7 @@ always @(posedge clk_sys) begin
 	if (playback_color == 2'b0 || ~DMA_EN || border) begin
 		PLAYBACK <= (border & ~BORDER_CONTROL) ? 8'd0 : COLOR_MAP[0];
 	end else begin
-		PLAYBACK <= COLOR_MAP[pb_map_index[playback_palette] + playback_color] & (COLOR_KILL ? 8'b1110_0000 : 8'b1111_1111);
+		PLAYBACK <= COLOR_MAP[pb_map_index[playback_palette] + playback_color] & (COLOR_KILL ? 8'b0000_1111 : 8'b1111_1111);
 	end
 end
 

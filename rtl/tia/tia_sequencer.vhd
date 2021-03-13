@@ -274,7 +274,7 @@ begin
    end process;
 
    -- Output of phase 1 latch
-   cnt_out_p1 <= cnt_out_p1_c when (p1_clk_i = '1') else cnt_out_p1_s;
+ --  cnt_out_p1 <= cnt_out_p1_c when (p1_clk_i = '1') else cnt_out_p1_s;
 
    ----------------
    -- Phase two!!!!

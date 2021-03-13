@@ -1,5 +1,17 @@
-// (C) Jamie Dickson, 2020
-// For MiSTer use only
+// (C) Jamie Blanks, 2021
+
+// For MiSTer use only.
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 module dma_ctrl(
 	input logic         clk_sys, 
@@ -95,19 +107,14 @@ logic [15:0] ZONE_PTR;
 logic A11en;
 logic A12en;
 logic wrote_one;
-logic hbs_latch;
-logic vbe_latch;
 logic width_ovr;
 logic shutting_down;
-logic [9:0] cycles_elapsed;
 logic [3:0] halt_cnt;
+logic vbe_trigger;
 
 always_ff @(posedge clk_sys) if (reset) begin
 	state <= DMA_WAIT_ZP;
 	substate <= 0;
-	hbs_latch <= 0;
-	cycles_elapsed <= 0;
-	vbe_latch <= 0;
 	width_ovr <= 0;
 	shutting_down <= 1;
 	latch_byte <= 0;
@@ -118,6 +125,7 @@ always_ff @(posedge clk_sys) if (reset) begin
 	drive_AB <= 0;
 	wrote_one <= 0;
 	OFFSET <= 0;
+	vbe_trigger <= 0;
 	WM <= 0;
 	A12en <= 0;
 	A11en <= 0;
@@ -126,62 +134,69 @@ always_ff @(posedge clk_sys) if (reset) begin
 	PAL <= 0;
 	clear_hpos <= 0;
 end else if (mclk0) begin
-	cycles_elapsed <= cycles_elapsed + 1'd1;
 	if (hbs) begin
-		hbs_latch <= 1;
+		vbe_trigger <= 0;
 		if (dma_en && ~vblank)
 			HALT <= 1;
-		cycles_elapsed <= 0;
 	end
 	if (vbe) begin
+		vbe_trigger <= 1;
 		if (dma_en)
-		HALT <= 1;
-		vbe_latch <= 1;
-		cycles_elapsed <= 0;
+			HALT <= 1;
 	end
 	case (state)
 		// Wait for starting condition
+		DMA_WAIT_DP,
 		DMA_WAIT_ZP: begin
 			if (pclk1) begin
-				if ((HALT || (vbe & dma_en)))
+				if (HALT || ((vbe || hbs) & dma_en))
 					halt_cnt <= halt_cnt + 1'd1;
 				else
 					halt_cnt <= 0;
 				if (halt_cnt == 1) begin
 					substate <= 0;
-					ZONE_PTR <= ZP;
-					AddrB <= ZP;
-					shutting_down <= 1;
-					state <= DMA_START_ZP;
 					drive_AB <= 1;
-					HALT <= 1;
 					DLI <= 0;
+
+					if (vbe_trigger) begin
+						vbe_trigger <= 0;
+						ZONE_PTR <= ZP;
+						AddrB <= ZP;
+						shutting_down <= 1;
+						state <= DMA_START_ZP;
+					end else begin
+						DL_PTR <= DP;
+						AddrB <= DP;
+						shutting_down <= 0;
+						state <= DMA_START_DP;
+					end
+
 				end
 			end
 		end
 
-		DMA_WAIT_DP: begin
-			// Technically this is prevented by having no edges on the combined "blank" signal, but
-			// this is tidier for FPGA
-			if (vblank)
-				state <= DMA_WAIT_ZP;
-			if (pclk1) begin
-				if (HALT || (hbs & dma_en))
-					halt_cnt <= halt_cnt + 1'd1;
-				else
-					halt_cnt <= 0;
-				if (halt_cnt == 1) begin
-					drive_AB <= 1;
-					substate <= 0;
-					AddrB <= DP;
-					shutting_down <= 0;
-					DL_PTR <= DP;
-					state <= DMA_START_DP;
-					HALT <= 1;
-					DLI <= 0;
-				end
-			end
-		end
+		// DMA_WAIT_DP: begin
+		// 	// Technically this is prevented by having no edges on the combined "blank" signal, but
+		// 	// this is tidier for FPGA
+		// 	if (vblank)
+		// 		state <= DMA_WAIT_ZP;
+		// 	if (pclk1) begin
+		// 		if (HALT || (hbs & dma_en))
+		// 			halt_cnt <= halt_cnt + 1'd1;
+		// 		else
+		// 			halt_cnt <= 0;
+		// 		if (halt_cnt == 1) begin
+		// 			drive_AB <= 1;
+		// 			substate <= 0;
+		// 			AddrB <= DP;
+		// 			shutting_down <= 0;
+		// 			DL_PTR <= DP;
+		// 			state <= DMA_START_DP;
+		// 			HALT <= 1;
+		// 			DLI <= 0;
+		// 		end
+		// 	end
+		// end
 
 		DMA_START_ZP:begin
 			substate <= substate + 1'd1;
@@ -441,8 +456,6 @@ end else if (mclk0) begin
 				1: begin
 					ZONE_PTR <= ZONE_PTR + 1'd1;
 					DP[7:0] <= DataB;
-				// end
-				// 2: begin
 					if (pclk1) begin
 						HALT <= 0;
 						state <= DMA_WAIT_DP;

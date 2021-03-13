@@ -86,6 +86,7 @@ module memory_map (
 			ctrl <= {1'b0, 2'b11, 1'b1, 4'b0000}; // Allow skipping bios by disabling dma on reset
 			color_map <= 200'b0;
 			char_base <= 8'b0;
+			DB_out <= 0;
 			{ZPH,ZPL} <= pal ? {8'h27, 8'h30} : {8'h00, 8'h84};
 		end else if (pclk0) begin
 			deassert_ready <= 1'b0;

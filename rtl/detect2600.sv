@@ -29,7 +29,7 @@ wire hasMatch3F;
 
 always @(posedge clk) begin
 if (hasMatchFE) force_bs<=3;
-else if (hasMatchE0) force_bs<=4;
+else if (hasMatchE0 && cart_size=='d8192) force_bs<=4;
 else if (hasMatch3F) force_bs<=5;
 //else if (hasMatchP2) force_bs<=7; // size
 //else if (hasMatchFA) force_bs<=8; // size

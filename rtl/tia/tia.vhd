@@ -260,7 +260,7 @@ begin
 
     rsync <= '0'; -- Tie off for z26 comparison
 
-    gnd <= '0';
+    --gnd <= '0';
 
     -- This component controls clocking and
     -- resets for the system...
@@ -310,8 +310,8 @@ begin
        rwn          => cpu_rwn,
        vsync        => vsync,
        vblank       => vblank,
-       vbl_ena_i4i5 => vbl_ena_i4i5,
-       vbl_dump_prt => vbl_dump_prt,
+       --vbl_ena_i4i5 => vbl_ena_i4i5,
+       --vbl_dump_prt => vbl_dump_prt,
        wsync        => wsync,
        --rsync        => rsync, 
        rsync        => open, 
@@ -360,7 +360,7 @@ begin
        resmp0       => resmp0,
        resmp1       => resmp1,
        hmove        => hmove,
-       hmclr        => hmclr,
+       --hmclr        => hmclr,
        cxclr        => cxclr
 
     );
@@ -480,9 +480,9 @@ begin
        p0_mot       => p0_mot,
        m0_mot       => m0_mot,
        p1_mot       => p1_mot,
-       m1_mot       => m1_mot,
-       aud_clk1     => aud_clk1,
-       aud_clk2     => aud_clk2
+       m1_mot       => m1_mot
+       --aud_clk1     => aud_clk1,
+       --aud_clk2     => aud_clk2
 
     );
 

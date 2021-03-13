@@ -100,13 +100,13 @@ begin
        if (reset = '1') then
 
           flop_d1 <= '0';
-          flop_d4 <= '0';
+          --flop_d4 <= '0';
 
        elsif(clk'event and clk = '1') then
 
           if (ena_180 = '1') then
              flop_d1 <= flop_d2 nor flop_d3;
-             flop_d4 <= flop_d3;
+             --flop_d4 <= flop_d3;
           end if;
 
        end if;

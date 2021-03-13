@@ -1,6 +1,5 @@
 set_global_assignment -name QIP_FILE rtl/t65/t65.qip
 set_global_assignment -name QIP_FILE rtl/tia/tia.qip
-set_global_assignment -name QIP_FILE rtl/RIOT/riot.qip
 set_global_assignment -name QIP_FILE rtl/Pokey/Pokey.qip
 set_global_assignment -name QIP_FILE rtl/Maria/maria.qip
 set_global_assignment -name QIP_FILE rtl/jt51/jt51.qip

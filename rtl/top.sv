@@ -1,6 +1,19 @@
-`include "atari7800.vh"
+// (C) Jamie Blanks, 2021
 
-`define OLD_TIA
+// For MiSTer use only.
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+`include "atari7800.vh"
 
 module Atari7800(
 input  logic        clk_sys,
@@ -16,10 +29,14 @@ output logic        VBlank,
 output logic        ce_pix,
 input  logic        PAL,
 input  logic        hsc_en,
+output logic        hsc_ram_cs,
+input  logic  [7:0] hsc_ram_dout,
+output logic  [7:0] dout,
 
 output logic [15:0] AUDIO_R,
 output logic [15:0] AUDIO_L,
 input logic         show_border,
+input logic         show_overscan,
 input logic         bypass_bios,
 input logic         tia_mode,
 
@@ -38,8 +55,6 @@ output logic        pclk0,
 
 input  logic        loading,
 
-output logic  [7:0] ld,
-
 // Tia inputs
 input  logic  [3:0] idump,
 input  logic  [1:0] ilatch,
@@ -55,15 +70,10 @@ output logic  [7:0] PBout,
 input logic [3:0] force_bs,
 input logic sc
 );
-
-	assign ld[5:1] = '0;
-	assign ld[0] = lock_ctrl;
 	assign cart_sel = cart_cs;
 	assign bios_sel = bios_cs;
-	assign ce_pix = tia_clk;
-
 	assign bios_DB_out = bios_out;
-//	assign cart_DB_out = cart_out;
+	assign ce_pix = mclk1;
 
 	/////////////
 	// Signals //
@@ -163,6 +173,8 @@ input logic sc
 		RW = dma_en ? 1'b1 : cpu_rwn;
 	end
 
+	assign dout = write_DB;
+
 	// Memory
 	logic [10:0] clear_addr;
 
@@ -173,7 +185,7 @@ input logic sc
 	(
 		.clock   (clk_sys),
 		.address (loading ? clear_addr : AB[10:0]),
-		.data    (loading ? 8'hFF : write_DB),
+		.data    (loading ? 8'h00 : write_DB),
 		.wren    ((~RW & ram0_cs & pclk0) || loading),
 		.q       (ram0_DB_out)
 	);
@@ -182,20 +194,20 @@ input logic sc
 	(
 		.clock   (clk_sys),
 		.address (loading ? clear_addr : AB[10:0]),
-		.data    (loading ? 8'hFF : write_DB),
+		.data    (loading ? 8'h00 : write_DB),
 		.wren    ((~RW & ram1_cs & pclk0) || loading),
 		.q       (ram1_DB_out)
 	);
 
-	// Clock
-	logic maria_vblank, maria_vsync, maria_hblank, maria_hsync;
-	logic [3:0] maria_red, maria_green, maria_blue;
-	logic pclk1;
 	// MARIA
+	logic maria_vblank, maria_vblank_ex, maria_vsync, maria_hblank, maria_hsync;
+	logic [3:0] maria_red, maria_green, maria_blue;
+	logic tia_cpu_clk;
+	logic pclk1;
+
 	maria maria_inst(
 		.mclk0           (mclk0),
 		.mclk1           (mclk1),
-		.halt_unlock     (ctrl_writes == 2),
 		.AB_in           (AB),
 		.AB_out          (maria_AB_out),
 		.drive_AB        (maria_drive_AB),
@@ -213,6 +225,7 @@ input logic sc
 		.sel_slow_clock  (sel_slow_clock),
 		.tia_en          (tia_en),
 		.tia_clk         (tia_clk),
+		.tia_cpu_clk     (tia_cpu_clk),
 		.CS              (CS),
 		.RW              (RW),
 		.maria_en        (maria_en),
@@ -225,6 +238,7 @@ input logic sc
 		.blue            (maria_blue),
 		.vsync           (maria_vsync),
 		.vblank          (maria_vblank),
+		.vblank_ex       (maria_vblank_ex),
 		.hsync           (maria_hsync),
 		.hblank          (maria_hblank)
 	);
@@ -235,10 +249,8 @@ input logic sc
 	logic [7:0] tia_red, tia_green, tia_blue;
 
 	// TIA
-	`ifdef OLD_TIA
-
 	tia tia_inst (
-		.clk           (clk_tia),
+		.clk           (clk_sys),
 		.master_reset  (reset),
 		.pix_ref       (),
 		.sys_rst       (),
@@ -270,44 +282,6 @@ input logic sc
 		.aud_ch1       (audv1)
 	);
 
-`else
-
-	TIA2 tia_inst
-	(
-		.clk(clk_sys),
-		.phi0(),
-		.phi2(pclk0),
-		.RW_n(RW),
-		.rdy(tia_RDY),
-		.addr({(AB[5] & tia_en), AB[4:0]}),
-		.d_in(write_DB),
-		.d_out(tia_DB_out),
-		.i(idump),     // On real hardware, these would be ADC pins. i0..3
-		.i4(ilatch[0]),
-		.i5(ilatch[1]),
-		.aud0(audv0),
-		.aud1(audv1),
-		.col(),
-		.lum(tia_luma),
-		.BLK_n(),
-		.sync(),
-		.cs0_n(~tia_cs),
-		.cs2_n(~tia_cs),
-		.rst(reset),
-		.ce(1),     // Clock enable for CLK generation only
-		.video_ce(),
-		.vblank(),
-		.hblank(),
-		.vsync(),
-		.hsync(),
-		.phi2_gen()
-	);
-
-	assign aud1 = 1;
-	assign aud0 = 1;
-
-
-`endif
 	logic [23:0] stella_palette[128];
 	assign stella_palette = '{
 		24'h000000, 24'h4a4a4a, 24'h6f6f6f, 24'h8e8e8e,
@@ -353,7 +327,7 @@ input logic sc
 		GREEN <= maria_en ? {maria_green, maria_green} : tia_green;
 		BLUE <= maria_en ? {maria_blue, maria_blue} : tia_blue;
 		VSync <= maria_en ? maria_vsync : tia_vsync;
-		VBlank <= maria_en ? maria_vblank : tia_vblank;
+		VBlank <= maria_en ? (show_overscan ? maria_vblank : maria_vblank_ex) : tia_vblank;
 		HSync <= maria_en ? maria_hsync : tia_hsync;
 		HBlank <= maria_en ? maria_hblank : tia_hblank;
 	end
@@ -370,27 +344,6 @@ input logic sc
 	assign AUDIO_R = audio_lut[aud_index] + pokey_audio + ym_audio_r;
 	assign AUDIO_L = audio_lut[aud_index] + pokey_audio + ym_audio_l;
 
-//RIOT
-// riot RIOT (
-// 	.clk          (clk_sys),
-// 	.reset        (reset),
-// 	.go_clk       (pclk1),
-// 	.go_clk_180   (pclk0),
-// 	.port_a_in    (PAin),
-// 	.port_a_out   (PAout),
-// 	.port_a_ctl   (),
-// 	.port_b_in    (PBin),
-// 	.port_b_out   (PBout),
-// 	.port_b_ctl   (),
-// 	.addr         (AB[6:0]),
-// 	.din          (write_DB),
-// 	.dout         (riot_DB_out),
-// 	.rwn          (RW),
-// 	.ramsel_n     (~riot_ram_cs),
-// 	.cs1          (riot_cs),
-// 	.cs2n         (~riot_cs),
-// 	.irqn         ()
-// );
 
 M6532 #(.init_7800(1)) riot_inst_2
 (
@@ -434,9 +387,6 @@ M6502C cpu_inst
 	.is_halted (halt_active)
 );
 
-assign ld[6] = tia_en;
-assign ld[7] = maria_en;
-
 ctrl_reg ctrl
 (
 	.clk          (clk_sys),
@@ -455,13 +405,13 @@ ctrl_reg ctrl
 );
 
 wire cart_read_flag;
-assign cart_read = cart_read_flag & (tia_en ? pclk0 : mclk1);
+assign cart_read = cart_read_flag & mclk1;
 
 logic [24:0] cart_2600_addr_out,cart_7800_addr_out;
 logic [7:0] cart_2600_DB_out , cart_7800_DB_out;
 
-assign cart_addr_out = tia_mode ? cart_2600_addr_out : cart_7800_addr_out;
-assign cart_DB_out = tia_mode ? cart_2600_DB_out : cart_7800_DB_out;
+assign cart_addr_out = tia_en ? cart_2600_addr_out : cart_7800_addr_out;
+assign cart_DB_out = tia_en ? cart_2600_DB_out : cart_7800_DB_out;
 
 cart cart
 (
@@ -481,6 +431,8 @@ cart cart
 	.cart_xm    (cart_xm),
 	.cart_read  (cart_read_flag),
 	.hsc_en     (hsc_en),
+	.hsc_ram_cs (hsc_ram_cs),
+	.hsc_ram_din(hsc_ram_dout),
 	.rw         (RW),
 	.dout       (cart_7800_DB_out),
 	.pokey_audio(pokey_audio),
@@ -537,6 +489,7 @@ always_ff @(posedge clk) begin
 		tia_en_out <= tia_mode ? 1'd1 : 1'd0;
 		writes <= 2'd2;
 	end else if (~latch_b && cs && pclk0) begin
+		wrote_once <= 1;
 		lock_out <= d_in[0];
 		maria_en_out <= d_in[1];
 		bios_en_out <= d_in[2];

@@ -179,17 +179,12 @@ assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign AUDIO_S   = 0;
 assign AUDIO_MIX = 0;
 
-assign LED_USER  = ld[7];
-assign LED_DISK  = ld[6];
+assign LED_USER  = cart_download | bk_state |  bk_pending;
+assign LED_DISK  = 0;
 assign LED_POWER = 0;
-
-assign VIDEO_ARX = status[8] ? 8'd16 : 12'd1535;
-assign VIDEO_ARY = status[8] ? 8'd9  : 12'd1294;
 
 assign VGA_SCALER = 0;
 
-// assign {SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 6'b111111;
-// assign SDRAM_DQ = 'Z;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
@@ -214,7 +209,7 @@ pll pll
 
 // 7.1590909 half
 // 14318189 = NTSC
-// 14.187576 = PAL
+// 14.187576 = PAL (7.093788)
 // Skip every 109 cycles?
 logic reset;
 always @(posedge clk_vid)
@@ -231,27 +226,39 @@ reg old_cart_download;
 // 0         1         2         3          4         5         6
 // 01234567890123456789012345678901 23456789012345678901234567890123
 // 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
-// X       XXXXXXXXXXXXX
+// X       XXXXXXXXXXXXXXXXXXXXXX
 
 `include "build_id.v"
 parameter CONF_STR = {
 	"ATARI7800;;",
-	"F1S,A78A26;",
-	"O8,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
-	"O9B,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
-	"OE,Show Border,No,Yes;",
-	"OK,Composite Blending,No,Yes;",
+	"FS1,A78A26;",
+	"-;",
 	"OFG,Region,Auto,NTSC,PAL;",
-	"OIJ,High Score Cart,Auto,On,Off;",
-	"-;",
-	"OH,Bypass Bios,Yes,No;",
-	"-;",
-	"O7,Swap Joysticks,No,Yes;",
 	"OC,Difficulty Right,Right,Left;",
 	"OD,Difficulty Left,Right,Left;",
 	"-;",
+	"P1,Audio & Video;",
+	"P1-;",
+	"d0P1OM,Vertical Crop,Disabled,216p(5x);",
+	"d0P1ONQ,Crop Offset,0,2,4,8,10,12,-12,-10,-8,-6,-4,-2;",
+	"P1ORS,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
+	"P1-;",
+	"P1O8,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	"P1O9B,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
+	"P1OT,Show Overscan,No,Yes;",
+	"P1OE,Show Border,No,Yes;",
+	"P1OK,Composite Blending,No,Yes;",
+	"P2,Peripherals;",
+	"P2OIJ,High Score Cart,Auto,On,Off;",
+	"P2OH,Bypass Bios,Yes,No;",
+	"P2O7,Swap Joysticks,No,Yes;",
+	"P3,Atari2600;",
+	"P3OL,Black & White,Off,On;",
+	"-;",
 	"R0,Reset;",
-	"J1,Fire1,Fire2,Pause,Select,Start,PU,PD;",
+	"J1,Fire1,Fire2,Pause,Select,Start;",
+	"jn,B|P,A,R,Select,Start;",
+	"jp,Y|P,B,R,Select,Start;",
 	"V,v",`BUILD_DATE
 };
 
@@ -264,14 +271,23 @@ wire        img_readonly;
 wire [63:0] img_size;
 wire        ioctl_download;
 wire [24:0] ioctl_addr;
-wire [7:0] ioctl_dout;
+wire [7:0]  ioctl_dout;
 wire        ioctl_wr;
 wire [7:0]  ioctl_index;
 wire [21:0] gamma_bus;
 
 wire [15:0] joy0,joy1;
-wire ioctl_wait;
+wire        ioctl_wait;
 
+reg  [31:0] sd_lba;
+reg         sd_rd = 0;
+reg         sd_wr = 0;
+wire        sd_ack;
+wire  [8:0] sd_buff_addr;
+wire  [7:0] sd_buff_dout;
+wire  [7:0] sd_buff_din;
+wire        sd_buff_wr;
+reg         en216p;
 
 hps_io #(.STRLEN(($size(CONF_STR)>>3))) hps_io
 (
@@ -287,6 +303,7 @@ hps_io #(.STRLEN(($size(CONF_STR)>>3))) hps_io
 	.joystick_1(joy1),
 
 	.status(status),
+	.status_menumask({en216p}),
 
 	.ioctl_addr(ioctl_addr),
 	.ioctl_dout(ioctl_dout),
@@ -294,6 +311,15 @@ hps_io #(.STRLEN(($size(CONF_STR)>>3))) hps_io
 	.ioctl_download(ioctl_download),
 	.ioctl_index(ioctl_index),
 	.ioctl_wait(ioctl_wait),
+
+	.sd_lba(sd_lba),
+	.sd_rd(sd_rd),
+	.sd_wr(sd_wr),
+	.sd_ack(sd_ack),
+	.sd_buff_addr(sd_buff_addr),
+	.sd_buff_dout(sd_buff_dout),
+	.sd_buff_din(sd_buff_din),
+	.sd_buff_wr(sd_buff_wr),
 
 	.img_mounted(img_mounted),
 	.img_readonly(img_readonly),
@@ -311,7 +337,6 @@ wire HSync;
 wire VSync;
 wire HBlank;
 wire VBlank;
-wire [7:0] ld;
 
 wire [15:0] bios_addr;
 reg [7:0] cart_data, bios_data;
@@ -327,8 +352,13 @@ logic cart_busy;
 logic cart_read;
 logic [7:0] cart_data_sd;
 reg cart_loaded = 0;
+logic RW;
 
 logic cart_is_7800;
+logic [7:0] hsc_ram_dout, din;
+logic hsc_ram_cs;
+logic tia_mode;
+
 wire region_select = ~|status[16:15] ? cart_region[0] : (status[16] ? 1'b1 : 1'b0);
 
 Atari7800 main
@@ -346,16 +376,19 @@ Atari7800 main
 	.VSync        (VSync),
 	.HBlank       (HBlank),
 	.VBlank       (VBlank),
-	.ce_pix       (),
+	.ce_pix       (ce_pix),
 	.show_border  (status[14]),
+	.show_overscan(status[29]),
 	.PAL          (region_select),
-	.tia_mode     (~cart_is_7800),
+	.tia_mode     (tia_mode),
 	.bypass_bios  (~status[17]),
 	.hsc_en       (~|status[19:18] && (|cart_save || cart_xm[0]) ? 1'b1 : status[18]),
+	.hsc_ram_dout (hsc_ram_dout),
+	.hsc_ram_cs   (hsc_ram_cs),
 
 	// Audio
-	.AUDIO_R        (AUDIO_R), // 16 bit
-	.AUDIO_L        (AUDIO_L), // 16 bit
+	.AUDIO_R      (AUDIO_R), // 16 bit
+	.AUDIO_L      (AUDIO_L), // 16 bit
 
 	// Cart Interface
 	.cart_sel     (cart_sel),
@@ -372,10 +405,8 @@ Atari7800 main
 	.bios_sel     (bios_sel),
 	.bios_out     (bios_data),
 	.AB           (bios_addr), // Address
-	.RW           (), // inverted write
-
-	// Debug
-	.ld           (ld), // LED control
+	.RW           (RW), // inverted write
+	.dout         (din),
 
 	// Tia
 	.idump        (idump),  // Paddle {A0, B0, A1, B1}
@@ -393,7 +424,6 @@ Atari7800 main
 	.sc           (sc)
 );
 
-//assign ioctl_wait = cart_download && cart_busy;
 ////////////////////////////  MEMORY  ///////////////////////////////////
 wire [3:0] force_bs;
 wire sc;
@@ -415,19 +445,18 @@ initial begin
 	cart_region = 0;
 	cart_save = 0;
 	cart_xm = 0;
+	tia_mode = 0;
 end
 
 always_ff @(posedge clk_sys) begin
 	logic old_cart_download;
 	logic [24:0] old_addr;
 	cart_is_7800 <= (cart_header == "ATARI");
-	if (cart_download && ~status[0])
-		cart_loaded <= 1;
-
 	old_cart_download <= cart_download;
-	if (old_cart_download & ~cart_download)
-		cart_size <= (old_addr - (cart_is_7800 ? 8'd128 : 1'b0)) + 1; // 32 bit 1
+	if (cart_download && ioctl_wr)
+		cart_size <= (ioctl_addr - (cart_is_7800 ? 8'd128 : 1'b0)) + 1'd1; // 32 bit 1
 	if (cart_download) begin
+		tia_mode <= ioctl_index[7:6] != 0;
 		old_addr <= ioctl_addr;
 		case (ioctl_addr)
 			'd01: cart_header[39:32] <= ioctl_dout;
@@ -446,6 +475,7 @@ always_ff @(posedge clk_sys) begin
 			'd57: cart_region <= ioctl_dout; // 0=ntsc, 1=pal
 			'd58: cart_save <= ioctl_dout;   // 0=none, 1=high score cart, 2=savekey
 			'd63: cart_xm <= ioctl_dout; // 1 = Has XM
+			'd64: cart_loaded <= 1;
 		endcase
 	end
 end
@@ -457,7 +487,7 @@ spram #(
 	.addr_width(15),
 	.mem_name("Cart"),
 	.mem_init_file("mem0.mif")
-) cart // FIXME: this needs to be 19 bits!
+) cart
 (
 	.address (cart_addr),
 	.clock   (clk_sys),
@@ -476,6 +506,8 @@ spram #(.addr_width(12), .mem_name("BIOS")) bios
 	.q       (bios_data)
 );
 
+always @(posedge clk_vid)
+	ioctl_wait <= cart_download && cart_busy;
 
 sdram sdram
 (
@@ -489,7 +521,7 @@ sdram sdram
 	.ch0_addr   (cart_download ? cart_write_addr : cart_addr),
 	.ch0_wr     (ioctl_wr & cart_download),
 	.ch0_din    (ioctl_dout),
-	.ch0_rd     (cart_read),
+	.ch0_rd     (cart_read & ~cart_download),
 	.ch0_dout   (cart_data_sd),
 	.ch0_busy   (cart_busy),
 
@@ -544,7 +576,7 @@ assign joyb = status[7] ? joy0 : joy1;
 assign PBin[7] = ~status[13];              // Right diff
 assign PBin[6] = ~status[14];              // Left diff
 assign PBin[5] = 1'b1;                     // Unused
-assign PBin[4] = 1'b1;                     // 2600 B/W?
+assign PBin[4] = ~status[21];              // 2600 B/W?
 assign PBin[3] = (~joya[6] & ~joyb[6]);    // Pause
 assign PBin[2] = 1'b1;                     // Unused
 assign PBin[1] = (~joya[7] & ~joyb[7]);    // Select
@@ -600,55 +632,99 @@ assign VGA_F1 = 1'b0;
 assign CLK_VIDEO = clk_vid;
 assign VGA_SL = sl[1:0];
 
+wire       vcrop_en = status[22];
+wire [3:0] vcopt    = status[26:23];
+reg  [4:0] voff;
+wire [1:0] ar = {1'd0, status[8]};
+wire [11:0] arx,ary;
+
+always @(posedge CLK_VIDEO) begin
+	en216p <= ((HDMI_WIDTH == 1920) && (HDMI_HEIGHT == 1080) && !forced_scandoubler && !scale);
+	voff <= (vcopt < 6) ? {vcopt,1'b0} : ({vcopt,1'b0} - 5'd24);
+end
+
+// Status[29]
+// 224x320: 3200:2611
+// 224x372: 3720:2611
+
+// 
+/* PAL
+372x292 = 12'd3968 12'd2993
+320x292 = 12'd1819 12'd1595
+372x272 = 12'd992 12'd697
+320x272 = 12'd2560 12'd2091
+
+*/
+always_comb begin
+	arx = 0;
+	ary = 0;
+	if (~region_select) begin // NTSC
+		if (status[14]) begin // Show border
+			if (status[29]) begin // Show Overscan
+				arx = 12'd3471;
+				ary = 12'd2632;
+			end else begin
+				arx = 12'd3720;
+				ary = 12'd2611;
+			end
+		end else begin
+			if (status[29]) begin // Show Overscan
+				arx = 12'd2979;
+				ary = 12'd2626;
+			end else begin
+				arx = 12'd3200;
+				ary = 12'd2611;
+			end
+		end
+	end else begin // PAL
+		if (status[14]) begin // Show border
+			if (status[29]) begin // Show Overscan
+				arx = 12'd3968;
+				ary = 12'd2993;
+			end else begin
+				arx = 12'd992;
+				ary = 12'd697;
+			end
+		end else begin
+			if (status[29]) begin // Show Overscan
+				arx = 12'd1819;
+				ary = 12'd1595;
+			end else begin
+				arx = 12'd2560;
+				ary = 12'd2091;
+			end
+		end
+	end
+end
+
+wire vga_de;
+video_freak video_freak
+(
+	.*,
+	.VGA_DE_IN(vga_de),
+	.ARX((!ar) ? arx : (ar - 1'd1)),
+	.ARY((!ar) ? ary : 12'd0),
+	.CROP_SIZE((en216p & vcrop_en) ? 10'd216 : 10'd0),
+	.CROP_OFF(voff),
+	.SCALE(status[28:27])
+);
+
 wire [2:0] scale = status[11:9];
 wire [2:0] sl = scale ? scale - 1'd1 : 3'd0;
 wire       scandoubler = (scale || forced_scandoubler);
 
-
-always @(posedge CLK_VIDEO) begin : pix_div
-	reg [2:0] div;
-	div <= div + 1'd1;
-	ce_pix <= !div;
-end
-
-
-// always @(posedge CLK_VIDEO) begin
-// 	en216p <= ((HDMI_WIDTH == 1920) && (HDMI_HEIGHT == 1080) && !forced_scandoubler && !scale);
-// 	voff <= (vcopt < 6) ? {vcopt,1'b0} : ({vcopt,1'b0} - 5'd24);
+// always @(posedge CLK_VIDEO) begin : pix_div
+// 	reg [2:0] div;
+// 	div <= div + 1'd1;
+// 	ce_pix <= !div;
 // end
-
-// wire vga_de;
-// video_freak video_freak
-// (
-// 	.*,
-// 	.VGA_DE_IN(vga_de),
-// 	.ARX((!ar) ? (hide_overscan ? 12'd64 : 12'd128) : (ar - 1'd1)),
-// 	.ARY((!ar) ? (hide_overscan ? 12'd49 : 12'd105) : 12'd0),
-// 	.CROP_SIZE((en216p & vcrop_en) ? 10'd216 : 10'd0),
-// 	.CROP_OFF(voff),
-// 	.SCALE(status[40:39])
-// );
-
-// video_mixer #(.LINE_LENGTH(336), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
-// (
-// 	.*,
-
-// 	.hq2x(scale==1),
-// //	.scanlines(0),
-// //	.mono(0),
-
-// 	.R(R),
-// 	.G(G),
-// 	.B(B)
-// );
 
 video_mixer #(.LINE_LENGTH(372), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
 (
 	.*,
 
+	.VGA_DE(vga_de),
 	.hq2x(scale==1),
-//	.scanlines(0),
-//	.mono(0),
 	.HSync(hs_cofi),
 	.HBlank(hb_cofi),
 	.VSync(vs_cofi),
@@ -659,8 +735,86 @@ video_mixer #(.LINE_LENGTH(372), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
 	.B(b_cofi)
 );
 
+/////////////////////////  STATE SAVE/LOAD  /////////////////////////////
+wire bk_save_write = ~RW & hsc_ram_cs;
 
+reg bk_pending;
 
+always @(posedge clk_sys) begin
+	if (bk_ena && ~OSD_STATUS && bk_save_write)
+		bk_pending <= 1'b1;
+	else if (bk_state)
+		bk_pending <= 1'b0;
+end
 
+dpram_dc #(.widthad_a(11)) hsc_ram
+(
+	.clock_a   (clk_sys),
+	.address_a (bios_addr),
+	.data_a    (din),
+	.wren_a    (~RW & hsc_ram_cs),
+	.q_a       (hsc_ram_dout),
+
+	.clock_b   (clk_sys),
+	.address_b ({sd_lba[1:0],sd_buff_addr}),
+	.data_b    (sd_buff_dout),
+	.wren_b    (sd_buff_wr & sd_ack),
+	.q_b       (sd_buff_din)
+);
+
+wire downloading = cart_download;
+reg old_downloading = 0;
+reg bk_ena = 0;
+always @(posedge clk_sys) begin
+	
+	old_downloading <= downloading;
+	if(~old_downloading & downloading) bk_ena <= 0;
+	
+	//Save file always mounted in the end of downloading state.
+	if(downloading && img_mounted && !img_readonly) bk_ena <= 1;
+end
+
+wire bk_load    = 0;//status[6];
+wire bk_save    = (bk_pending & OSD_STATUS);
+reg  bk_loading = 0;
+reg  bk_state   = 0;
+
+always @(posedge clk_sys) begin : save_block
+	reg old_load = 0, old_save = 0, old_ack;
+
+	old_load <= bk_load & bk_ena;
+	old_save <= bk_save & bk_ena;
+	old_ack  <= sd_ack;
+	
+	if(~old_ack & sd_ack) {sd_rd, sd_wr} <= 0;
+	
+	if(!bk_state) begin
+		if((~old_load & bk_load) | (~old_save & bk_save)) begin
+			bk_state <= 1;
+			bk_loading <= bk_load;
+			sd_lba <= 0;
+			sd_rd <=  bk_load;
+			sd_wr <= ~bk_load;
+		end
+		if(old_downloading & ~downloading & |img_size & bk_ena) begin
+			bk_state <= 1;
+			bk_loading <= 1;
+			sd_lba <= 0;
+			sd_rd <= 1;
+			sd_wr <= 0;
+		end 
+	end else begin
+		if(old_ack & ~sd_ack) begin
+			if(&sd_lba[1:0]) begin
+				bk_loading <= 0;
+				bk_state <= 0;
+			end else begin
+				sd_lba <= sd_lba + 1'd1;
+				sd_rd  <=  bk_loading;
+				sd_wr  <= ~bk_loading;
+			end
+		end
+	end
+end
 
 endmodule

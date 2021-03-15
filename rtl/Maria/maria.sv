@@ -22,7 +22,9 @@ module maria(
 	input  logic [15:0] AB_in,
 	output logic [15:0] AB_out,
 	output logic        drive_AB,
+	input  logic [1:0]  pal_temp,
 	input  logic        hide_border,
+	input  logic        bypass_bios,
 	input  logic        PAL,
 
 	input  logic  [7:0] read_DB_in,
@@ -49,10 +51,10 @@ module maria(
 	input logic         maria_en,
 
 	// VGA Interface
-	output logic [7:0]  UV_out,
-	output logic [3:0]  red,
-	output logic [3:0]  green,
-	output logic [3:0]  blue,
+	output logic [7:0]  YC,
+	output logic [7:0]  red,
+	output logic [7:0]  green,
+	output logic [7:0]  blue,
 	output logic        hsync,
 	output logic        vsync,
 	output logic        hblank,
@@ -132,13 +134,17 @@ module maria(
 	logic ctrl_written;
 	logic pclk_toggle;
 	logic old_ssc;
+	logic [1:0] zp_written;
+	logic [7:0] UV_out;
+
+	assign YC = UV_out & (ctrl[7] ? 8'h0F : 8'hFF);
 
 	// Normally this would be one cpu cycle, but T65 appears to
 	// need this low for two cpu cycles to take action. It's edge triggered
 	// so c'est la vie, won't cause problems.
 	assign int_b = ~(edge_counter == 1 || edge_counter == 2);
 
-	wire dma_en = (ctrl[6:5] == 2'b10);
+	wire dma_en = (ctrl[6:5] == 2'b10) && &zp_written;
 
 	wire PCLKEDGE = clock_div == 1 && pclk_toggle;
 
@@ -154,6 +160,7 @@ module maria(
 			clock_div <= 0;
 			clk_toggle <= 0;
 			pclk_toggle <= 0;
+			pal_counter <= 0;
 			mclk1 <= 0;
 			mclk0 <= 0;
 			pclk0 <= 0;
@@ -164,10 +171,10 @@ module maria(
 				tia_clk <= 1;
 			else if (mclk0)
 				tia_clk <= 0;
-			if (PAL)
-				pal_counter <= pal_counter + 1'd1;
-			else
-				pal_counter <= 0;
+			// if (PAL)
+			// 	pal_counter <= pal_counter + 1'd1;
+			// else
+			// 	pal_counter <= 0;
 
 			mclk1 <= 0;
 			mclk0 <= 0;
@@ -221,8 +228,8 @@ module maria(
 					clock_div <= clock_div - 1'd1;
 				else begin
 					pclk_toggle <= ~pclk_toggle;
-					pclk1 <= ~pclk_toggle;
-					pclk0 <= pclk_toggle;
+					pclk1 <= pclk_toggle;
+					pclk0 <= ~pclk_toggle;
 					clock_div <= sel_slow_clock ? 3'd2 : 2'd1;
 				end
 				if (old_ssc != sel_slow_clock) begin
@@ -270,6 +277,7 @@ module maria(
 		.bios_en        (bios_en),
 		.drive_AB       (drive_AB),
 		.ctrl           (ctrl),
+		.zp_written     (zp_written),
 		.color_map      (color_map),
 		.status_read    ({vblank, 7'b0}),
 		.char_base      (char_base),
@@ -314,11 +322,8 @@ module maria(
 		.mclk1       (mclk1),
 		.clk         (clk_sys),
 		.reset       (reset),
-		.uv_in       (UV_out),
+		.bypass_bios (bypass_bios),
 		.PAL         (PAL),
-		.RED         (red),
-		.GREEN       (green),
-		.BLUE        (blue),
 		.HSync       (hsync),
 		.VSync       (vsync),
 		.hblank      (hblank),

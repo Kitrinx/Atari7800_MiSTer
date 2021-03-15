@@ -25,6 +25,7 @@ port
 
     -- Clock and system reset
     clk            : in  std_logic;                    -- Main oscillator clock x2
+    ce             : in  std_logic;                    -- Clock enable, should be 2x normal tia
     master_reset   : in  std_logic;                    -- not on TIA, but useful
 
     -- System control
@@ -269,6 +270,7 @@ begin
     (
 
        clk            => clk,
+       ce             => ce,
        master_reset   => master_reset,
        -- synthesis translate_off
        ref_sys_clk    => ref_sys_clk,

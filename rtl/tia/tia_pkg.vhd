@@ -334,7 +334,8 @@ package tia_pkg is
   (
 
      -- Master Clock and Master Reset 
-     clk            : in  std_logic; -- Main FPGA/ASIC system clock 
+     clk            : in  std_logic; -- Main FPGA/ASIC system clock
+     ce             : in  std_logic;
      master_reset   : in  std_logic; -- Master system reset (i.e. POR)
 
      -- synthesis translate_off
@@ -650,6 +651,7 @@ package tia_pkg is
 
      -- Clock and reset 
      clk        : in  std_logic; -- Main oscillator 
+     ce         : in  std_logic; -- clock enable
      reset      : in  std_logic; -- async. input reset
 
      ena        : in  std_logic;
@@ -927,6 +929,7 @@ package tia_pkg is
 
      -- Clock and system reset
      clk            : in std_logic;                     -- Main oscillator clock 
+     ce             : in std_logic;
      master_reset   : in std_logic;                     -- not on TIA, but useful
 
      -- System control

@@ -38,6 +38,7 @@ port
 
    -- Master Clock and Master Reset 
    clk            : in  std_logic; -- Main FPGA/ASIC system clock 
+   ce             : in  std_logic;
    master_reset   : in  std_logic; -- Master system reset (i.e. POR)
 
    -- synthesis translate_off
@@ -91,6 +92,7 @@ architecture struct of tia_clk_rst_ctl is
 
     signal mrst_del1      : std_logic;
     signal mrst_del2      : std_logic;
+    signal ref_count_half : std_logic;
 
     -- Signals used for simulation only
     -- synthesis translate_off
@@ -130,19 +132,31 @@ begin
            pix_clk_ref_i <= '0';
            sys_clk_ref_i <= '0';
            go_clocks     <= '0';
+           ref_count_half <= '0';
 
        elsif(clk'event and clk = '1') then
+        if (ce = '1') then
 
-           -- Enable clocks
-           go_clocks     <= '1';
+            -- Enable clocks
+            go_clocks     <= '1';
 
-           -- Divide system clock by two WRT clk_2x
-           sys_clk_ref_i <= not(sys_clk_ref_i);
+            -- Divide system clock by two WRT clk_2x
+            ref_count_half <= not(ref_count_half);
+            if (ref_count_half = '1') then
+                sys_clk_ref_i <= '1';
+            end if;
 
-           -- Divide system clock by two!
-           if (go_clocks = '1') then
-               pix_clk_ref_i <= not(pix_clk_ref_i);
-           end if;
+            -- Divide system clock by two!
+            if (go_clocks = '1') then
+                if (ref_count_half = '1') then
+                    pix_clk_ref_i <= '1';
+                end if;
+            end if;
+        else
+            sys_clk_ref_i <= '0';
+            pix_clk_ref_i <= '0';
+        end if;
+
 
        end if;
 
@@ -158,10 +172,11 @@ begin
            mrst_del2 <= '1';
 
        elsif (clk'event and clk = '1') then
+        if (ce = '1') then
 
            mrst_del1 <= master_reset_i;
            mrst_del2 <= mrst_del1;
-
+        end if;
        end if;
 
    end process;
@@ -182,6 +197,7 @@ begin
       ref_clk    => ref_sys_clk_i,
       -- synthesis translate_on
       clk        => clk,
+      ce         => ce,
       reset      => reset_cpu_clk,
       ena        => sys_clk_ref_i,
       ena_180    => pix_clk_ref_i,

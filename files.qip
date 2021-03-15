@@ -10,6 +10,7 @@ set_global_assignment -name VHDL_FILE rtl/cart2600.vhdl
 set_global_assignment -name VERILOG_FILE rtl/souper.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tia.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cart.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video_mux.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cofi.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/detect2600.sv

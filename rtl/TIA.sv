@@ -246,6 +246,7 @@ logic [2:0] phi_div;
 logic [2:0] hp_cnt;
 logic rsync_latch;
 logic phi_clear;
+logic cc_tog;
 
 assign HP1 = hp_cnt == 0 && ce;
 assign HP2 = hp_cnt == 4 && ce;
@@ -254,12 +255,12 @@ assign phi0 = phi_div == 3 && ce;
 //assign phi2_gen = phi0;
 assign phi1 = phi_div == 1 && ce;
 assign phase = phi_div > 3 || phi_div == 0;
+assign CC = cc_tog && ce;
 
 always_ff @(posedge clk) begin : phi0_gen
 	phi2_gen <= phi0;
-
 	if (ce) begin
-		CC <= ~CC;
+		cc_tog <= ~cc_tog;
 		phi_div <= phi_div + 1'd1;
 		hp_cnt <= hp_cnt + 1'd1;
 
@@ -285,7 +286,7 @@ always_ff @(posedge clk) begin : phi0_gen
 
 	if (reset) begin
 		rsync_latch <= 0;
-		CC <= 1;
+		cc_tog <= 1;
 		phi_clear <= 0;
 		phi_div <= 0;
 		hp_cnt <= 0;
@@ -835,7 +836,7 @@ module TIA2
 	// Abstractions
 	input        rst,
 	input        ce,     // Clock enable for CLK generation only
-	input        video_ce,
+	output       video_ce,
 	output       vblank,
 	output       hblank,
 	output       hgap,
@@ -861,6 +862,7 @@ logic cc; // Color Clock (original oscillator speed)
 logic rhb, shb, wsr, shbd; // Hblank triggers
 
 assign cs = ~cs0_n & ~cs2_n;
+assign video_ce = cc;
 
 assign d_out[5:0] = 6'h00;
 assign BLK_n = ~(hblank | vblank);
@@ -872,15 +874,17 @@ assign vblank = wreg[VBLANK][1];
 // Register writes happen when Phi2 falls, or in our context, when Phi0 rises.
 // Register reads happen when Phi2 is high. This is relevant in particular to RIOT which is clocked on Phi2.
 
-always @(posedge phi2) begin
-	d_out[7:6] <= 2'b00; // Should be open bus if invalid reg
-	if (cs & RW_n) begin
-		if (addr[3:0] == INPT4 && ~wreg[VBLANK][6])
-			d_out[7:6] <= {i4, 1'b0};
-		else if (addr[3:0] == INPT5 && ~wreg[VBLANK][6])
-			d_out[7:6] <= {i5, 1'b0};
-		else
-			d_out[7:6] <= rreg[addr[3:0]][7:6]; // reads only use the lower 4 bits of addr
+always @(posedge clk) begin
+	if (phi2) begin
+		d_out[7:6] <= 2'b00; // Should be open bus if invalid reg
+		if (cs & RW_n) begin
+			if (addr[3:0] == INPT4 && ~wreg[VBLANK][6])
+				d_out[7:6] <= {i4, 1'b0};
+			else if (addr[3:0] == INPT5 && ~wreg[VBLANK][6])
+				d_out[7:6] <= {i5, 1'b0};
+			else
+				d_out[7:6] <= rreg[addr[3:0]][7:6]; // reads only use the lower 4 bits of addr
+		end
 	end
 end
 
@@ -1029,65 +1033,185 @@ hmove_gen hmv
 );
 
 
-player_o player0
+// player_o player0
+// (
+// 	.clk(clk),
+// 	.motck(cc),
+// 	.enable(p0ec),
+// 	.resp(resp0),
+// 	.reset(rst),
+// 	.delay(wreg[VDELP0]),
+// 	.grp(wreg[GRP0]),
+// 	.grpo(wreg[GRP0O]),
+// 	.refp(wreg[REFP0][3]),
+// 	.size(wreg[NUSIZ0][2:0]),
+// 	.p(p0)
+// );
+
+// player_o player1
+// (
+// 	.clk(clk),
+// 	.motck(cc),
+// 	.enable(p1ec),
+// 	.resp(resp1),
+// 	.reset(rst),
+// 	.delay(wreg[VDELP1]),
+// 	.grp(wreg[GRP1]),
+// 	.grpo(wreg[GRP1O]),
+// 	.refp(wreg[REFP1][3]),
+// 	.size(wreg[NUSIZ1][2:0]),
+// 	.p(p1)
+// );
+
+logic m2pr0, m2pr1;
+
+tia_player_obj player0
 (
-	.clk(clk),
-	.motck(cc),
-	.enable(p0ec),
-	.resp(resp0),
-	.reset(rst),
-	.delay(wreg[VDELP0]),
-	.grp(wreg[GRP0]),
-	.grpo(wreg[GRP0O]),
-	.refp(wreg[REFP0][3]),
-	.size(wreg[NUSIZ0][2:0]),
-	.p(p0)
+	.clk           (clk),
+	.pix_clk       (cc),
+	.pl_mot        (p0ec),
+	.adv_obj       (~hblank),
+	.reset_sys     (rst),
+	.nusiz         (wreg[NUSIZ0][2:0]),
+	.pl_refl       (wreg[REFP0][3]),
+	.pl_vdel       (wreg[VDELP0]),
+	.play_new      (wreg[GRP0]),
+	.play_old      (wreg[GRP0O]),
+	.respl         (resp0),
+	.m2p_reset     (m2pr0),//wreg[RESMP0][1]
+	.g_pl          (p0)
 );
 
-player_o player1
+tia_player_obj player1
 (
-	.clk(clk),
-	.motck(cc),
-	.enable(p1ec),
-	.resp(resp1),
-	.reset(rst),
-	.delay(wreg[VDELP1]),
-	.grp(wreg[GRP1]),
-	.grpo(wreg[GRP1O]),
-	.refp(wreg[REFP1][3]),
-	.size(wreg[NUSIZ1][2:0]),
-	.p(p1)
+	.clk           (clk),
+	.pix_clk       (cc),
+	.pl_mot        (p1ec),
+	.adv_obj       (~hblank),
+	.reset_sys     (rst),
+	.nusiz         (wreg[NUSIZ1][2:0]),
+	.pl_refl       (wreg[REFP1][3]),
+	.pl_vdel       (wreg[VDELP1]),
+	.play_new      (wreg[GRP1]),
+	.play_old      (wreg[GRP1O]),
+	.respl         (resp1),
+	.m2p_reset     (m2pr1),//wreg[RESMP0][1]
+	.g_pl          (p1)
 );
 
-missile_o missile0
+// tia_player_obj player1
+// (
+// 	.clk           (),
+// 	.pix_clk       (),
+// 	.reset_sys     (),
+// 	.nusiz         (),
+// 	.pl_refl       (),
+// 	.pl_vdel       (),
+// 	.play_new      (),
+// 	.play_old      (),
+// 	.respl         (),
+// 	.m2p_reset     (),
+// 	.g_pl          ()
+// );
+
+// missile_o missile0
+// (
+// 	.resm(resm0),
+// 	.resmp(wreg[RESMP0][1]),
+// 	.hmove(hmove),
+// 	.enam(wreg[ENAM0][1]),
+// 	.size(wreg[NUSIZ0][5:4]),
+// 	.m(m0)
+// );
+
+logic m2p_ena, m2p_ena2;
+
+tia_missile_obj missile0
 (
-	.resm(resm0),
-	.resmp(wreg[RESMP0][1]),
-	.hmove(hmove),
-	.enam(wreg[ENAM0][1]),
-	.size(wreg[NUSIZ0][5:4]),
-	.m(m0)
+	.clk           (clk),
+	.mis_mot       (m0ec),
+	.adv_obj       (~hblank),
+	.pix_clk       (cc),
+	.reset_sys     (rst),
+	.mis_num       (wreg[NUSIZ0][2:0]),
+	.mis_siz       (wreg[NUSIZ0][5:4]),
+	.mis_ena       (wreg[ENAM0][1]),
+	.m2p_ena       (m2p_ena),
+	.resmis        (resm0),
+	.m2p_reset     (m2pr0),
+	.g_mis         (m0)
 );
 
-missile_o missile1
+tia_missile_obj missile1
 (
-	.resm(resm1),
-	.resmp(wreg[RESMP1][1]),
-	.hmove(hmove),
-	.enam(wreg[ENAM1][1]),
-	.size(wreg[NUSIZ1][5:4]),
-	.m(m1)
+	.clk           (clk),
+	.mis_mot       (m1ec),
+	.adv_obj       (~hblank),
+	.pix_clk       (cc),
+	.reset_sys     (rst),
+	.mis_num       (wreg[NUSIZ1][2:0]),
+	.mis_siz       (wreg[NUSIZ1][5:4]),
+	.mis_ena       (wreg[ENAM1][1]),
+	.m2p_ena       (m2p_ena2),
+	.resmis        (resm1),
+	.m2p_reset     (m2pr1),
+	.g_mis         (m1)
 );
 
-ball_o ball
-(
-	.clk(clk),
-	.resbl(resbl),
-	.delay(wreg[VDELBL]),
-	.enabl(wreg[ENABL][1]),
-	.size(wreg[CTRLPF][5:4]),
-	.bl(bl)
-);
+
+// tia_missile_obj missile1
+// (
+// 	.clk           (),
+// 	.pix_clk       (),
+// 	.reset_sys     (),
+// 	.mis_num       (),
+// 	.mis_siz       (),
+// 	.mis_ena       (),
+// 	.m2p_ena       (),
+// 	.resmis        (),
+// 	.m2p_reset     (),
+// 	.g_mis         ()
+// );
+
+// tia_ball_obj ball
+// (
+// 	.clk           (),
+// 	.pix_clk       (),
+// 	.reset_sys     (),
+// 	.ball_mot      (),
+// 	.adv_obj       (),
+// 	.enabl_n       (),
+// 	.resbl         (),
+// 	.pf_bsize      (),
+// 	.g_bl          ()
+// );
+
+	// -- These signals move the object counter
+	// -- for synthesis applications ;)
+	// pl_mot        : in  std_logic;
+	// adv_obj       : in  std_logic;
+
+
+
+// missile_o missile1
+// (
+// 	.resm(resm1),
+// 	.resmp(wreg[RESMP1][1]),
+// 	.hmove(hmove),
+// 	.enam(wreg[ENAM1][1]),
+// 	.size(wreg[NUSIZ1][5:4]),
+// 	.m(m1)
+// );
+
+// ball_o ball
+// (
+// 	.clk(clk),
+// 	.resbl(resbl),
+// 	.delay(wreg[VDELBL]),
+// 	.enabl(wreg[ENABL][1]),
+// 	.size(wreg[CTRLPF][5:4]),
+// 	.bl(bl)
+// );
 
 priority_encoder prior
 (

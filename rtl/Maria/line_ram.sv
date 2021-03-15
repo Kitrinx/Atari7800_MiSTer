@@ -26,7 +26,6 @@ module line_ram(
 );
 
 logic [159:0][4:0]          lram_in, lram_out;
-logic [1:0] rm_in, rm_out; // ADDED A SECOND BIT - Jamie
 
 logic [7:0]                 input_addr;
 
@@ -36,8 +35,35 @@ logic [4:0]               playback_cell;
 logic [8:0]               playback_ix;
 logic [7:0]               lram_ix;
 logic [7:0]               offset;
+logic [4:0]               new_cell;
+logic [4:0]               lram_a_dout;
+logic [4:0]               lram_b_dout;
+logic                     ram_tog;
+logic [4:0]               lram_bus;
 
-//assign playback_ix = (LRAM_OUT_COL > 9'd133) ? LRAM_OUT_COL - 9'd134 : 9'd0;
+wire erase_cell = playback_ix[0] && mclk0;
+assign lram_bus = ram_tog ? lram_a_dout : lram_b_dout;
+
+spram #(.addr_width(8), .data_width (5), .mem_name("LRAMA")) lineram_a
+(
+	.clock   (clk_sys),
+	.address (ram_tog ? playback_ix[8:1] : input_addr),
+	.data    (ram_tog ? 8'h00 : new_cell),
+	.wren    (ram_tog ? erase_cell : latch_byte && mclk1),
+	.enable  (mclk0 | mclk1),
+	.q       (lram_a_dout)
+);
+
+spram #(.addr_width(8), .data_width (5), .mem_name("LRAMB")) lineram_b
+(
+	.clock   (clk_sys),
+	.address (~ram_tog ? playback_ix[8:1] : input_addr),
+	.data    (~ram_tog ? 8'h00 : new_cell),
+	.wren    (~ram_tog ? erase_cell : latch_byte && mclk1),
+	.enable  (mclk0 | mclk1),
+	.q       (lram_b_dout)
+);
+
 
 logic [5:0] pb_map_index[8];
 assign pb_map_index = '{5'd0, 5'd3, 5'd6, 5'd9, 5'd12, 5'd15, 5'd18, 5'd21};
@@ -49,11 +75,14 @@ always @(posedge clk_sys) begin
 		else
 			playback_ix <= 0;
 	end
-	if (playback_color == 2'b0 || ~DMA_EN || border) begin
-		PLAYBACK <= (border & ~BORDER_CONTROL) ? 8'd0 : COLOR_MAP[0];
-	end else begin
-		PLAYBACK <= COLOR_MAP[pb_map_index[playback_palette] + playback_color] & (COLOR_KILL ? 8'b0000_1111 : 8'b1111_1111);
+	if (mclk0) begin
+		if (playback_color == 2'b0 || ~DMA_EN || border) begin
+			PLAYBACK <= (border & ~BORDER_CONTROL) ? 8'd0 : COLOR_MAP[0];
+		end else begin
+			PLAYBACK <= COLOR_MAP[pb_map_index[playback_palette] + playback_color];
+		end
 	end
+
 end
 
 
@@ -164,6 +193,8 @@ always_ff @(posedge clk_sys) begin
 		lram_out <= 800'd0;
 		offset <= 0;
 	end else if (mclk0) begin
+		if (erase_cell)
+			lram_out[lram_ix] <= 0;
 		if (lrc) begin
 			lram_in <= 800'd0; // All background color
 			lram_out <= lram_in;

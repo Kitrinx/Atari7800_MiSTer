@@ -72,7 +72,7 @@ typedef enum logic [4:0] {
 
 // 5 Byte Header Format:
 // byte 0: Address Low
-// byte 1: Mode - 1'bWM, 1'bINDIRECT, 6'b000000
+// byte 1: Mode - 1'bWM, 1'b1, 1'bINDIRECT, 5'b00000 -- This is checked agains the mask 0x5F for end of dma!
 // byte 2: High Address
 // byte 3: PPPWWWWW where P is palette data and W is width of request. If Width (or the byte) is 0, DMA ends for the line. In this mode width of zero is 32.
 // byte 4: Horizontal Position
@@ -149,7 +149,7 @@ end else if (mclk0) begin
 		DMA_WAIT_DP,
 		DMA_WAIT_ZP: begin
 			if (pclk1) begin
-				if (HALT || ((vbe || hbs) & dma_en))
+				if (HALT || ((vbe || (hbs & ~vblank)) & dma_en))
 					halt_cnt <= halt_cnt + 1'd1;
 				else
 					halt_cnt <= 0;
@@ -174,29 +174,6 @@ end else if (mclk0) begin
 				end
 			end
 		end
-
-		// DMA_WAIT_DP: begin
-		// 	// Technically this is prevented by having no edges on the combined "blank" signal, but
-		// 	// this is tidier for FPGA
-		// 	if (vblank)
-		// 		state <= DMA_WAIT_ZP;
-		// 	if (pclk1) begin
-		// 		if (HALT || (hbs & dma_en))
-		// 			halt_cnt <= halt_cnt + 1'd1;
-		// 		else
-		// 			halt_cnt <= 0;
-		// 		if (halt_cnt == 1) begin
-		// 			drive_AB <= 1;
-		// 			substate <= 0;
-		// 			AddrB <= DP;
-		// 			shutting_down <= 0;
-		// 			DL_PTR <= DP;
-		// 			state <= DMA_START_DP;
-		// 			HALT <= 1;
-		// 			DLI <= 0;
-		// 		end
-		// 	end
-		// end
 
 		DMA_START_ZP:begin
 			substate <= substate + 1'd1;

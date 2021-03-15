@@ -48,6 +48,7 @@ logic [7:0] ram_dout;
 logic [7:0] ym_dout;
 logic [7:0] hsc_rom_dout;
 logic [7:0] hsc_ram_dout;
+logic [7:0] pokey4k_dout;
 
 logic rom_cs, ram_cs, pokey_cs, ym_cs;
 logic [2:0] hardware_map[8];
@@ -109,7 +110,6 @@ always_ff @(posedge clk_sys) if (pclk1) begin
 		bank_type <= 3'd3;
 	end else if (cart_flags[12]) begin                           // Souper
 		hardware_map <= '{3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
-		//bank_map <= '{4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd0, 4'd4};
 		bank_type <= 3'd4;
 	end else if (cart_flags[1] || cart_size >= 32'h10000) begin // SuperGame
 		hardware_map <= '{3'd0, 3'd0, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4, 3'd4};
@@ -140,7 +140,7 @@ always_ff @(posedge clk_sys) if (pclk1) begin
 			hardware_map <= '{3'd0, 3'd0, 3'd0, 3'd0, 3'd1, 3'd1, 3'd1, 3'd1};
 		else if (cart_size <= 32'hC000) // A7848
 			hardware_map <= '{3'd0, 3'd0, 3'd1, 3'd1, 3'd1, 3'd1, 3'd1, 3'd1};
-		address_offset <= (cart_size - 1'd1) <= 32'hFFFF ? 32'hFFFF - (cart_size - 1'd1) : 32'd0;
+		address_offset <= cart_size <= 32'h10000 ? 32'h10000 - cart_size : 32'd0;
 		bank_type <= 3'd2;
 	end
 
@@ -171,7 +171,7 @@ always_ff @(posedge clk_sys) if (pclk1) begin
 
 end
 
-wire is_pokey_450 = (((cart_flags[6] || XCTRL1[4]) && address_in[15:4] == 8'h45) && cart_cs);
+wire is_pokey_450 = (((cart_flags[6] || XCTRL1[4]) && address_in[15:4] == 12'h45) && cart_cs);
 wire is_pokey_440 = ((cart_flags[10] && address_in[15:4] == 8'h44) && cart_cs);
 wire is_pokey_4k = ((cart_flags[0] && address_in[15:14] == 2'b01) && cart_cs);
 wire pokey4k_wo = cart_flags[0] && cart_flags[3];
@@ -264,16 +264,17 @@ always_comb begin
 		3'd3: dout = ram_dout;      // RAM Data
 		default: dout = 'Z;
 	endcase
-	if (is_pokey_450 | is_pokey_440 | (is_pokey_4k && ~pokey4k_wo))
-		dout = pokey4k_dout;
-	else if (is_ym)
+
+	if (is_ym)
 		dout = ym_dout;
 	if (hsc_rom_cs)
 		dout = hsc_rom_dout;
 	if (hsc_ram_cs)
 		dout = hsc_ram_dout;
-	if (XCTRL1_cs && rw)
-		dout = XCTRL1;
+	if (is_pokey_450 || is_pokey_440 || (is_pokey_4k && ~pokey4k_wo))
+		dout = pokey4k_dout;
+	// if (XCTRL1_cs && rw)
+	// 	dout = XCTRL1;
 	if (souper_en) begin
 		if (~souper_ram_cs)
 			dout = ram_dout;
@@ -282,9 +283,6 @@ always_comb begin
 	end
 
 end
-
-logic pokey4k_dout;
-
 
 logic [3:0] ch0, ch1, ch2, ch3;
 logic [5:0] pokey_mux;
@@ -346,10 +344,8 @@ jt51 ym2151 ( // FIXME: This clock is not exact
 	.sample   (),
 	.left     (),
 	.right    (),
-	// High res
 	.xleft    (),
 	.xright   (),
-	// Full res
 	.dacleft  (ym_audio_lo),
 	.dacright (ym_audio_ro)
 );
@@ -375,44 +371,36 @@ spram #(.addr_width(12), .mem_name("HSC"), .mem_init_file("mem4.mif")) hsc_rom
 );
 
 assign hsc_ram_dout = hsc_ram_din;
-// spram #(.addr_width(11), .mem_name("HSCR")) hsc_ram
-// (
-// 	.address (address_in[10:0]),
-// 	.clock   (clk_sys),
-// 	.data    (din),
-// 	.wren    (~rw & hsc_ram_cs & pclk0),
-// 	.q       (hsc_ram_dout)
-// );
 
 logic souper_rom_cs;
 assign souper_addr = {souper_bank, address_in[6:0]};
 
 souper soup_soup (
-	.clk(clk_sys),
-	.pclk1(pclk0), // FIXME create ce's
-	.reset(reset),
-	.halt_n(halt_n),
-	.data(din),
-	.rw(rw),
-	.addr_15(address_in[15]),
-	.addr_14(address_in[14]),
-	.addr_13(address_in[13]),
-	.addr_12(address_in[12]),
-	.addr_11(address_in[11]),
-	.addr_10(address_in[10]),
-	.addr_9(address_in[9]),
-	.addr_8(address_in[8]),
-	.addr_7(address_in[7]),
-	.addr_2(address_in[2]),
-	.addr_1(address_in[1]),
-	.addr_0(address_in[0]),
-	.romSel_n(souper_rom_cs),
-	.ramSel_n(souper_ram_cs),
-	.oe_n(),
-	.wr_n(souper_wr),
-	.mapAddr_7p(souper_bank),
-	.audCom(),
-	.audReq_n()
+	.clk        (clk_sys),
+	.pclk1      (pclk0), // FIXME create ce's
+	.reset      (reset),
+	.halt_n     (halt_n),
+	.data       (din),
+	.rw         (rw),
+	.addr_15    (address_in[15]),
+	.addr_14    (address_in[14]),
+	.addr_13    (address_in[13]),
+	.addr_12    (address_in[12]),
+	.addr_11    (address_in[11]),
+	.addr_10    (address_in[10]),
+	.addr_9     (address_in[9]),
+	.addr_8     (address_in[8]),
+	.addr_7     (address_in[7]),
+	.addr_2     (address_in[2]),
+	.addr_1     (address_in[1]),
+	.addr_0     (address_in[0]),
+	.romSel_n   (souper_rom_cs),
+	.ramSel_n   (souper_ram_cs),
+	.oe_n       (),
+	.wr_n       (souper_wr),
+	.mapAddr_7p (souper_bank),
+	.audCom     (),
+	.audReq_n   ()
 );
 
 endmodule: cart

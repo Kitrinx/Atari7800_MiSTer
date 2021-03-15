@@ -226,7 +226,7 @@ reg old_cart_download;
 // 0         1         2         3          4         5         6
 // 01234567890123456789012345678901 23456789012345678901234567890123
 // 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
-// X       XXXXXXXXXXXXXXXXXXXXXX
+// X       XXXXXXXXXXXXXXXXXXXXXXXX
 
 `include "build_id.v"
 parameter CONF_STR = {
@@ -248,6 +248,7 @@ parameter CONF_STR = {
 	"P1OT,Show Overscan,No,Yes;",
 	"P1OE,Show Border,No,Yes;",
 	"P1OK,Composite Blending,No,Yes;",
+	"P1OUV,Color Temperature,Warm,Cool,Hot;",
 	"P2,Peripherals;",
 	"P2OIJ,High Score Cart,Auto,On,Off;",
 	"P2OH,Bypass Bios,Yes,No;",
@@ -257,8 +258,8 @@ parameter CONF_STR = {
 	"-;",
 	"R0,Reset;",
 	"J1,Fire1,Fire2,Pause,Select,Start;",
-	"jn,B|P,A,R,Select,Start;",
-	"jp,Y|P,B,R,Select,Start;",
+	"jn,A|P,B,R,Select,Start;",
+	"jp,B|P,Y,R,Select,Start;",
 	"V,v",`BUILD_DATE
 };
 
@@ -358,6 +359,7 @@ logic cart_is_7800;
 logic [7:0] hsc_ram_dout, din;
 logic hsc_ram_cs;
 logic tia_mode;
+logic ce_pix_raw;
 
 wire region_select = ~|status[16:15] ? cart_region[0] : (status[16] ? 1'b1 : 1'b0);
 
@@ -376,10 +378,11 @@ Atari7800 main
 	.VSync        (VSync),
 	.HBlank       (HBlank),
 	.VBlank       (VBlank),
-	.ce_pix       (ce_pix),
+	.ce_pix       (ce_pix_raw),
 	.show_border  (status[14]),
 	.show_overscan(status[29]),
 	.PAL          (region_select),
+	.pal_temp     (status[31:30]),
 	.tia_mode     (tia_mode),
 	.bypass_bios  (~status[17]),
 	.hsc_en       (~|status[19:18] && (|cart_save || cart_xm[0]) ? 1'b1 : status[18]),
@@ -394,7 +397,7 @@ Atari7800 main
 	.cart_sel     (cart_sel),
 	.cart_out     (cart_loaded ? cart_data_sd : cart_data),
 	.cart_read    (cart_read),
-	.cart_size    (cart_is_7800 ? hcart_size : cart_size),
+	.cart_size    (cart_size),
 	.cart_addr_out(cart_addr),
 	.cart_flags   (cart_is_7800 ? cart_flags[15:0] : 16'd0),
 	.cart_region  (cart_is_7800 ? cart_region[0] : 1'b0),
@@ -432,6 +435,7 @@ detect2600 detect2600
 (
 	.clk(clk_sys),
 	.addr(ioctl_addr[12:0]),
+	.cart_size(cart_size),
 	.enable(ioctl_wr & cart_download),
 	.data(ioctl_dout),
 	.force_bs(force_bs),
@@ -441,6 +445,7 @@ detect2600 detect2600
 initial begin
 	cart_header = "ATARI";
 	hcart_size = 32'h00008000;
+	cart_size = 32'h00008000;
 	cart_flags = 0;
 	cart_region = 0;
 	cart_save = 0;
@@ -521,7 +526,7 @@ sdram sdram
 	.ch0_addr   (cart_download ? cart_write_addr : cart_addr),
 	.ch0_wr     (ioctl_wr & cart_download),
 	.ch0_din    (ioctl_dout),
-	.ch0_rd     (cart_read & ~cart_download),
+	.ch0_rd     (cart_read & ~cart_download & ~reset),
 	.ch0_dout   (cart_data_sd),
 	.ch0_busy   (cart_busy),
 
@@ -718,6 +723,13 @@ wire       scandoubler = (scale || forced_scandoubler);
 // 	div <= div + 1'd1;
 // 	ce_pix <= !div;
 // end
+
+reg ce_pix_old;
+assign ce_pix = ce_pix_raw & ~ce_pix_old;
+
+always @(posedge CLK_VIDEO) begin : pix_edge_gen
+	ce_pix_old <= ce_pix_raw;
+end
 
 video_mixer #(.LINE_LENGTH(372), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
 (

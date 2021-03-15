@@ -14,6 +14,7 @@
 // SOFTWARE.
 
 `include "atari7800.vh"
+//`define OLD_TIA
 
 module Atari7800(
 input  logic        clk_sys,
@@ -28,6 +29,7 @@ output logic        HBlank,
 output logic        VBlank,
 output logic        ce_pix,
 input  logic        PAL,
+input  logic [1:0]  pal_temp,
 input  logic        hsc_en,
 output logic        hsc_ram_cs,
 input  logic  [7:0] hsc_ram_dout,
@@ -73,7 +75,6 @@ input logic sc
 	assign cart_sel = cart_cs;
 	assign bios_sel = bios_cs;
 	assign bios_DB_out = bios_out;
-	assign ce_pix = mclk1;
 
 	/////////////
 	// Signals //
@@ -91,7 +92,7 @@ input logic sc
 	logic [15:0]            maria_AB_out;
 
 	// TIA Signals
-	logic hblank_tia, vblank_tia, aud0, aud1, tia_RDY;
+	logic hblank_tia, vblank_tia, tia_RDY;
 	logic [3:0] audv0, audv1;
 	logic [7:0] tia_db_out;
 	logic [15:0] aud_signal_out;
@@ -201,9 +202,10 @@ input logic sc
 
 	// MARIA
 	logic maria_vblank, maria_vblank_ex, maria_vsync, maria_hblank, maria_hsync;
-	logic [3:0] maria_red, maria_green, maria_blue;
+	logic [7:0] maria_red, maria_green, maria_blue;
 	logic tia_cpu_clk;
 	logic pclk1;
+	logic [3:0] maria_luma, maria_chroma;
 
 	maria maria_inst(
 		.mclk0           (mclk0),
@@ -212,7 +214,9 @@ input logic sc
 		.AB_out          (maria_AB_out),
 		.drive_AB        (maria_drive_AB),
 		.hide_border     (~show_border),
+		.bypass_bios     (bypass_bios),
 		.PAL             (PAL),
+		.pal_temp        (pal_temp),
 		.read_DB_in      (read_DB),
 		.write_DB_in     (write_DB),
 		.DB_out          (maria_DB_out),
@@ -229,7 +233,7 @@ input logic sc
 		.CS              (CS),
 		.RW              (RW),
 		.maria_en        (maria_en),
-		.UV_out          (uv_maria),
+		.YC              ({maria_chroma, maria_luma}),
 		.int_b           (m_int_b),
 		.halt_b          (halt_b),
 		.ready           (maria_RDY),
@@ -244,13 +248,15 @@ input logic sc
 	);
 
 	logic tia_vblank, tia_vsync, tia_hblank, tia_blank_n, tia_hsync;
-	logic [3:0] tia_color;
+	logic [3:0] tia_chroma;
 	logic [2:0] tia_luma;
-	logic [7:0] tia_red, tia_green, tia_blue;
+	logic tia_pix_ce;
 
+`ifdef OLD_TIA
 	// TIA
 	tia tia_inst (
 		.clk           (clk_sys),
+		.ce            (mclk1),
 		.master_reset  (reset),
 		.pix_ref       (),
 		.sys_rst       (),
@@ -275,63 +281,85 @@ input logic sc
 		.vid_vblank    (tia_vblank),
 		.vid_hblank    (tia_hblank),
 		.vid_lum       (tia_luma),
-		.vid_color     (tia_color),
+		.vid_color     (tia_chroma),
 		.vid_cb        (),
 		.vid_blank_n   (tia_blank_n),
 		.aud_ch0       (audv0),
 		.aud_ch1       (audv1)
 	);
 
-	logic [23:0] stella_palette[128];
-	assign stella_palette = '{
-		24'h000000, 24'h4a4a4a, 24'h6f6f6f, 24'h8e8e8e,
-		24'haaaaaa, 24'hc0c0c0, 24'hd6d6d6, 24'hececec,
-		24'h484800, 24'h69690f, 24'h86861d, 24'ha2a22a,
-		24'hbbbb35, 24'hd2d240, 24'he8e84a, 24'hfcfc54,
-		24'h7c2c00, 24'h904811, 24'ha26221, 24'hb47a30,
-		24'hc3903d, 24'hd2a44a, 24'hdfb755, 24'hecc860,
-		24'h901c00, 24'ha33915, 24'hb55328, 24'hc66c3a,
-		24'hd5824a, 24'he39759, 24'hf0aa67, 24'hfcbc74,
-		24'h940000, 24'ha71a1a, 24'hb83232, 24'hc84848,
-		24'hd65c5c, 24'he46f6f, 24'hf08080, 24'hfc9090,
-		24'h840064, 24'h97197a, 24'ha8308f, 24'hb846a2,
-		24'hc659b3, 24'hd46cc3, 24'he07cd2, 24'hec8ce0,
-		24'h500084, 24'h68199a, 24'h7d30ad, 24'h9246c0,
-		24'ha459d0, 24'hb56ce0, 24'hc57cee, 24'hd48cfc,
-		24'h140090, 24'h331aa3, 24'h4e32b5, 24'h6848c6,
-		24'h7f5cd5, 24'h956fe3, 24'ha980f0, 24'hbc90fc,
-		24'h000094, 24'h181aa7, 24'h2d32b8, 24'h4248c8,
-		24'h545cd6, 24'h656fe4, 24'h7580f0, 24'h8490fc,
-		24'h001c88, 24'h183b9d, 24'h2d57b0, 24'h4272c2,
-		24'h548ad2, 24'h65a0e1, 24'h75b5ef, 24'h84c8fc,
-		24'h003064, 24'h185080, 24'h2d6d98, 24'h4288b0,
-		24'h54a0c5, 24'h65b7d9, 24'h75cceb, 24'h84e0fc,
-		24'h004030, 24'h18624e, 24'h2d8169, 24'h429e82,
-		24'h54b899, 24'h65d1ae, 24'h75e7c2, 24'h84fcd4,
-		24'h004400, 24'h1a661a, 24'h328432, 24'h48a048,
-		24'h5cba5c, 24'h6fd26f, 24'h80e880, 24'h90fc90,
-		24'h143c00, 24'h355f18, 24'h527e2d, 24'h6e9c42,
-		24'h87b754, 24'h9ed065, 24'hb4e775, 24'hc8fc84,
-		24'h303800, 24'h505916, 24'h6d762b, 24'h88923e,
-		24'ha0ab4f, 24'hb7c25f, 24'hccd86e, 24'he0ec7c,
-		24'h482c00, 24'h694d14, 24'h866a26, 24'ha28638,
-		24'hbb9f47, 24'hd2b656, 24'he8cc63, 24'hfce070
-	};
+`else
 
-	wire [6:0] pal_index = {tia_color, tia_luma};
+	TIA2 tia_inst
+	(
+		.clk        (clk_sys),
+		.ce         (mclk0),     // Clock enable for CLK generation only
+		.phi0       (),
+		.phi2       (pclk0),
+		.RW_n       (RW),
+		.rdy        (tia_RDY),
+		.addr       ({(AB[5] & tia_en), AB[4:0]}),
+		.d_in       (write_DB),
+		.d_out      (tia_DB_out),
+		.i          (idump),     // On real hardware, these would be ADC pins. i0..3
+		.i4         (ilatch[0]),
+		.i5         (ilatch[1]),
+		.aud0       (audv0),
+		.aud1       (audv1),
+		.col        (tia_chroma),
+		.lum        (tia_luma),
+		.BLK_n      (tia_blank_n),
+		.sync       (),
+		.cs0_n      (~tia_cs),
+		.cs2_n      (~tia_cs),
+		.rst        (reset),
+		.video_ce   (tia_pix_ce),
+		.vblank     (tia_vblank),
+		//.hblank     (tia_hblank),
+		.hgap       (tia_hblank),
+		.vsync      (tia_vsync),
+		.hsync      (tia_hsync),
+		.phi2_gen   ()
+	);
 
-	assign {tia_red, tia_green, tia_blue} = stella_palette[pal_index];
+`endif
 
-	always @(posedge clk_sys) begin
-		RED <= maria_en ? {maria_red, maria_red} : tia_red;
-		GREEN <= maria_en ? {maria_green, maria_green} : tia_green;
-		BLUE <= maria_en ? {maria_blue, maria_blue} : tia_blue;
-		VSync <= maria_en ? maria_vsync : tia_vsync;
-		VBlank <= maria_en ? (show_overscan ? maria_vblank : maria_vblank_ex) : tia_vblank;
-		HSync <= maria_en ? maria_hsync : tia_hsync;
-		HBlank <= maria_en ? maria_hblank : tia_hblank;
-	end
+	wire [6:0] pal_index = {tia_chroma, tia_luma};
 
+	video_mux mux
+	(
+		.clk_sys        (clk_sys),
+		.maria_luma     (maria_luma),
+		.maria_chroma   (maria_chroma),
+		.maria_hblank   (maria_hblank),
+		.maria_vblank   (show_overscan ? maria_vblank : maria_vblank_ex),
+		.maria_hsync    (maria_hsync),
+		.maria_vsync    (maria_vsync),
+		.maria_pix_ce   (mclk1),
+		.tia_luma       (tia_luma),
+		.tia_chroma     (tia_chroma),
+		.tia_hblank     (tia_hblank),
+		.tia_vblank     (tia_vblank),
+		.tia_hsync      (tia_hsync),
+		.tia_vsync      (tia_vsync),
+		.tia_pix_ce     (tia_pix_ce),
+		.is_maria       (maria_en),
+		.pal_temp       (pal_temp),
+		.is_PAL         (PAL),
+		.hblank         (HBlank),
+		.vblank         (VBlank),
+		.hsync          (HSync),
+		.vsync          (VSync),
+		.red            (RED),
+		.green          (GREEN),
+		.blue           (BLUE),
+		.pix_ce         (ce_pix)
+	);
+
+	// Audio output is non-linear, and this table represents the proper compressed values of 
+	// audv0 + audv1. 
+	// Generated based on the info here:
+	// https://atariage.com/forums/topic/271920-tia-sound-abnormalities/
 	logic [15:0] audio_lut[32];
 	assign audio_lut = '{
 		16'h0000, 16'h0842, 16'h0FFF, 16'h1745, 16'h1E1D, 16'h2492, 16'h2AAA, 16'h306E,
@@ -340,7 +368,7 @@ input logic sc
 		16'h71C6, 16'h745C, 16'h76DA, 16'h7942, 16'h7B95, 16'h7DD3, 16'h7FFF, 16'hFFFF
 	};
 
-	wire [5:0] aud_index = audv0 + audv1;
+	wire [5:0] aud_index = audv0 + audv1; // FIXME: should this ever hit > index 30?
 	assign AUDIO_R = audio_lut[aud_index] + pokey_audio + ym_audio_r;
 	assign AUDIO_L = audio_lut[aud_index] + pokey_audio + ym_audio_l;
 
@@ -361,11 +389,11 @@ M6532 #(.init_7800(1)) riot_inst_2
 	.PA_in(PAin),
 	.PA_out(PAout),
 	.PB_in(PBin),
-	.PB_out(PBout)
+	.PB_out       (PBout)
 );
 
 // CPU
-assign RDY = maria_en ? maria_RDY : ((tia_en) ? tia_RDY : 1'b1);
+assign RDY = maria_RDY && tia_RDY;//maria_en ? maria_RDY : ((tia_en) ? tia_RDY : 1'b1);
 assign core_halt_b = (ctrl_writes == 2'd2) ? halt_b : 1'b1;
 assign CPU_NMI = ~m_int_b;
 
@@ -383,7 +411,7 @@ M6502C cpu_inst
 	.IRQ     (~IRQ_n),
 	.NMI     (CPU_NMI),
 	.RDY     (RDY),
-	.halt_b  (core_halt_b || (ctrl_writes < 2)),
+	.halt_b  (core_halt_b),
 	.is_halted (halt_active)
 );
 

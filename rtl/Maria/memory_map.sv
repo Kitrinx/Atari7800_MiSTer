@@ -14,6 +14,7 @@ module memory_map (
 	output `chipselect       cs,
 	input  logic             bios_en,
 	input  logic             drive_AB,
+	output logic [1:0]       zp_written,
 
 	output logic [7:0]       ctrl,
 	output logic [24:0][7:0] color_map,
@@ -35,7 +36,6 @@ module memory_map (
 
 	// Internal Memory Mapped Registers
 	logic [7:0]              ZPH, ZPL;
-
 	assign sel_slow_clock = (drive_AB) ? 1'b0 : ((tia_en) ? 1'b1 : ((cs == `CS_TIA) || (cs == `CS_RIOT_IO) || (cs == `CS_RIOT_RAM)));
 
 	assign ZP = {ZPH, ZPL};
@@ -84,8 +84,9 @@ module memory_map (
 	always_ff @(posedge sysclock) begin
 		if (~reset_b) begin
 			ctrl <= {1'b0, 2'b11, 1'b1, 4'b0000}; // Allow skipping bios by disabling dma on reset
-			color_map <= 200'b0;
+			color_map <= 200'b0; // FIXME: convert this to RAM?
 			char_base <= 8'b0;
+			zp_written <= 0;
 			DB_out <= 0;
 			{ZPH,ZPL} <= pal ? {8'h27, 8'h30} : {8'h00, 8'h84};
 		end else if (pclk0) begin
@@ -103,11 +104,11 @@ module memory_map (
 					8'h29: color_map[7] <= DB_in;
 					8'h2a: color_map[8] <= DB_in;
 					8'h2b: color_map[9] <= DB_in;
-					8'h2c: ZPH <= DB_in;
+					8'h2c: begin ZPH <= DB_in; zp_written[1] <= 1; end
 					8'h2d: color_map[10] <= DB_in;
 					8'h2e: color_map[11] <= DB_in;
 					8'h2f: color_map[12] <= DB_in;
-					8'h30: ZPL <= DB_in;
+					8'h30: begin ZPL <= DB_in; zp_written[0] <= 1; end
 					8'h31: color_map[13] <= DB_in;
 					8'h32: color_map[14] <= DB_in;
 					8'h33: color_map[15] <= DB_in;

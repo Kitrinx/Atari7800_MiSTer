@@ -946,7 +946,15 @@ BEGIN
 	-- Instantiate pokey noise circuits (lfsr)
 	initmode <= skctl_next(1) nor skctl_next(0);
 	poly_17_19_lfsr : pokey_poly_17_9
-		port map(clk=>clk,reset_n=>reset_n,init=>initmode,enable=>enable_179,select_9_17=>audctl_reg(7),bit_out=>noise_large,rand_out=>rand_out);
+		port map(
+			clk=>clk,
+			reset_n=>reset_n,
+			init=>initmode,
+			enable=>enable_179,
+			select_9_17=>audctl_reg(7),
+			bit_out=>noise_large,
+			rand_out=>rand_out
+		);
 		
 	poly_5_lfsr : pokey_poly_5
 		port map(clk=>clk,reset_n=>reset_n,init=>initmode,enable=>enable_179,bit_out=>noise_5);

@@ -4,6 +4,7 @@ module detect2600
 	input clk,
 	input [12:0] addr,
 	input enable,
+	input [31:0] cart_size,
 	input [7:0] data,
 	output [3:0] force_bs,
 	output sc

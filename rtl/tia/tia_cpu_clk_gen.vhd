@@ -37,6 +37,7 @@ port
    -- synthesis translate_on
   
    clk        : in  std_logic; -- Main clock x2
+   ce         : in  std_logic; -- clock enable
    reset      : in  std_logic; -- async. input reset
 
    ena        : in  std_logic; -- System clk ref.
@@ -103,12 +104,10 @@ begin
           --flop_d4 <= '0';
 
        elsif(clk'event and clk = '1') then
-
           if (ena_180 = '1') then
              flop_d1 <= flop_d2 nor flop_d3;
              --flop_d4 <= flop_d3;
           end if;
-
        end if;
 
    end process;
@@ -132,7 +131,7 @@ begin
            cnt <= "000";
 
        elsif (clk'event and clk = '1') then
-
+        if (ce = '1') then
            -- Increment reference counter
            cnt <= cnt + 1;
 
@@ -140,6 +139,7 @@ begin
            if (cnt = "101") then
                cnt <= (others => '0');
            end if;
+        end if;
  
        end if;
 
@@ -162,11 +162,13 @@ begin
            d2 <= '0';
 
        elsif(clk'event and clk = '1') then
-
+        if (ce = '1') then
            d0 <= p0_ref_i;
            d1 <= d0;
            d2 <= d1;
-
+        else 
+           d2 <= '0';
+           end if;
        end if;
 
    end process;

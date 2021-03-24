@@ -1,17 +1,19 @@
-// (C) Jamie Blanks, 2021
-
-// For MiSTer use only.
-
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+/************************************************************************
+* (C) Jamie Blanks, 2021                                                *
+*                                                                       *
+* This program is free software: you can redistribute it and/or modify  *
+* it under the terms of the GNU General Public License as published by  *
+* the Free Software Foundation, either version 3 of the License, or     *
+* (at your option) any later version.                                   *
+*                                                                       *
+* This program is distributed in the hope that it will be useful,       *
+* but WITHOUT ANY WARRANTY; without even the implied warranty of        *
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
+* GNU General Public License for more details.                          *
+*                                                                       *
+* You should have received a copy of the GNU General Public License     *
+* along with this program.  If not, see <https://www.gnu.org/licenses/>.*
+************************************************************************/
 
 module M6532
 (
@@ -54,9 +56,12 @@ assign PA_out = out_a;
 assign PB_out = out_b;
 
 wire [9:0] full_incr;
-
+logic [7:0] open_bus;
 always_ff @(posedge clk) if (ce) begin
+	open_bus <= d_in;
+	// FIXME: Dout too;
 	if ((CS1 & ~CS2_n) && RW_n) begin
+		d_out <= open_bus;
 		if (~RS_n) begin // RAM selected
 			d_out <= riot_ram[addr];
 		end else if (~addr[2]) begin // Address registers
@@ -66,11 +71,11 @@ always_ff @(posedge clk) if (ce) begin
 				2'b00: d_out <= (out_a & dir_a) | (PA_in & ~dir_a); // Input A
 				2'b10: d_out <= out_b; // Input B
 			endcase
-		end else begin // Timer & Interrupts
+		end else if (addr[2])begin // Timer & Interrupts
 			if (~addr[0])
 				d_out <= timer[7:0];
 			else
-				d_out <= {interrupt[7:6], 6'd0};
+				d_out <= {interrupt[7:6], open_bus[5:0]};
 		end
 	end
 	if (~res_n)
@@ -132,7 +137,8 @@ end else if (ce) begin : riot_stuff
 		end
 	end
 
-	out_a <= (out_a & dir_a) | (PA_in & ~dir_a);
+	// FIXME: Port A is set such so that it can drive SNAC port output (open drain)
+	out_a <= (out_a & dir_a) | (8'hFF & ~dir_a);
 	out_b <= (out_b & dir_b) | (PB_in & ~dir_b);
 
 	if (CS1 & ~CS2_n) begin
@@ -144,7 +150,7 @@ end else if (ce) begin : riot_stuff
 				case(addr[1:0])
 					2'b01: dir_a <= d_in; // DDRA
 					2'b11: dir_b <= d_in; // DDRB
-					2'b00: out_a <= (d_in & dir_a) | (PA_in & ~dir_a); // Output A
+					2'b00: out_a <= (d_in & dir_a) | (8'hFF & ~dir_a); // Output A
 					2'b10: out_b <= (d_in & dir_b) | (PB_in & ~dir_b); // Output B
 				endcase
 			end

@@ -27,28 +27,31 @@ module cart
 	input  logic [31:0] cart_size,
 	input  logic [7:0]  cart_save,
 	input  logic        cart_cs,
-	input  logic        dma_read,
 	input  logic        rw, // Write low
 	input  logic        reset,
 	input  logic        hsc_en,
 	input  logic  [7:0] hsc_ram_din,
 	input  logic  [7:0] cart_xm,
-
+	input  logic  [7:0] open_bus,
+	input  logic [10:0] ps2_key,
+	output logic        IRQ_n,
 	output logic [7:0]  dout,
 	output logic        hsc_ram_cs,
 	output logic        cart_read,
-	output logic [15:0] pokey_audio,
+	output logic [15:0] pokey_audio_r,
+	output logic [15:0] pokey_audio_l,
 	output logic [15:0] ym_audio_r,
 	output logic [15:0] ym_audio_l,
 	output logic [24:0] rom_address
 );
 
+assign IRQ_n = 1'b1;
 logic [7:0] bank_reg;
 logic [7:0] ram_dout;
 logic [7:0] ym_dout;
 logic [7:0] hsc_rom_dout;
 logic [7:0] hsc_ram_dout;
-logic [7:0] pokey4k_dout;
+logic [7:0] pokey4k_dout, pokey2_dout;
 
 logic rom_cs, ram_cs, pokey_cs, ym_cs;
 logic [2:0] hardware_map[8];
@@ -152,7 +155,7 @@ always_ff @(posedge clk_sys) if (pclk1) begin
 		hardware_map[3] <= 3'd3;
 		hardware_map[4] <= 3'd3;
 		ram_mask[13] <= 0;
-	end else if (cart_flags[7]) begin // Mirror RAM at $4k // FIXME: Rescue at fractalis crazy mapping
+	end else if (cart_flags[7]) begin // Mirror RAM at $4k
 		hardware_map[2] <= 3'd3;
 		hardware_map[3] <= 3'd3;
 		ram_mask[8] <= 0;
@@ -172,7 +175,7 @@ always_ff @(posedge clk_sys) if (pclk1) begin
 end
 
 wire is_pokey_450 = (((cart_flags[6] || XCTRL1[4]) && address_in[15:4] == 12'h45) && cart_cs);
-wire is_pokey_440 = ((cart_flags[10] && address_in[15:4] == 8'h44) && cart_cs);
+wire is_pokey_440 = (((cart_flags[10] || XCTRL1[4]) && address_in[15:4] == 8'h44) && cart_cs);
 wire is_pokey_4k = ((cart_flags[0] && address_in[15:14] == 2'b01) && cart_cs);
 wire pokey4k_wo = cart_flags[0] && cart_flags[3];
 
@@ -184,13 +187,14 @@ assign address_index = address_in[15:13];
 // Address translation
 always_comb begin
 	pokey_cs = 0;
+	pokey2_cs = 0;
 	ram_cs = 0;
 	ym_cs = 0;
 	rom_address = 25'd0;
 	if (is_pokey_450)
 		pokey_cs = 1;
 	else if (is_pokey_440)
-		pokey_cs = 1;
+		pokey2_cs = 1;
 	else if (is_pokey_4k && (~pokey4k_wo || ~rw))
 		pokey_cs = 1;
 	else if (is_ym)
@@ -258,11 +262,11 @@ spram #(.addr_width(15)) cart_ram
 //04 - Banked ROM
 always_comb begin
 	case(hardware_map[address_index])
-		3'd0: dout = 'Z;            // High Impedance
+		3'd0: dout = open_bus;            // High Impedance
 		3'd1, 3'd4: dout = rom_din; // ROM Data
 		3'd2: dout = pokey4k_dout;  // POKEY
 		3'd3: dout = ram_dout;      // RAM Data
-		default: dout = 'Z;
+		default: dout = open_bus;
 	endcase
 
 	if (is_ym)
@@ -271,10 +275,10 @@ always_comb begin
 		dout = hsc_rom_dout;
 	if (hsc_ram_cs)
 		dout = hsc_ram_dout;
-	if (is_pokey_450 || is_pokey_440 || (is_pokey_4k && ~pokey4k_wo))
+	if (is_pokey_450 || (is_pokey_4k && ~pokey4k_wo))
 		dout = pokey4k_dout;
-	// if (XCTRL1_cs && rw)
-	// 	dout = XCTRL1;
+	if (is_pokey_440)
+		dout = pokey2_dout;
 	if (souper_en) begin
 		if (~souper_ram_cs)
 			dout = ram_dout;
@@ -284,16 +288,41 @@ always_comb begin
 
 end
 
-logic [3:0] ch0, ch1, ch2, ch3;
-logic [5:0] pokey_mux;
-logic [3:0] pokey_ce;
+logic [3:0] ch0, ch1, ch2, ch3, ch0_2, ch1_2, ch2_2, ch3_2;
+logic [5:0] pokey_mux, pokey2_mux;
+logic [3:0] pokey_ce, pokey2_cs;
+logic using_two_pokey;
 
 always @(posedge clk_sys) begin
+	if (reset)
+		using_two_pokey <= 0;
+	if (is_pokey_440)
+		using_two_pokey <= 1;
 	pokey_ce <= pokey_ce + 1'd1;
 	pokey_mux <= ch0 + ch1 + ch2 + ch3;
+	pokey2_mux <= ch0_2 + ch1_2 + ch2_2 + ch3_2;
 end
 
-assign pokey_audio = (cart_flags[0] || cart_flags[6] || cart_flags[10]) ? {pokey_mux, 10'd0} : 16'd0;
+assign pokey_audio_r = (cart_flags[0] || cart_flags[6] || cart_flags[10]) ? {pokey_mux, 10'd0} : 16'd0;
+assign pokey_audio_l = ~using_two_pokey ? pokey_audio_r : {pokey2_mux, 10'd0};
+
+logic [5:0] keyboard_scan;
+logic [1:0] keyboard_response;
+logic old_ps2_10;
+always @(posedge clk_sys)
+	old_ps2_10 <= ps2_key[10];
+
+ps2_to_atari800 #(
+	.ps2_enable(0),
+	.direct_enable(1))
+ps2_to_pokey (
+	.CLK               (clk_sys),
+	.RESET_N           (~reset),
+	.INPUT             ({12'h000, 3'b000, ps2_key[9], 3'b000, ps2_key[8], 4'h0, ps2_key[7:0]}),
+	.KEYBOARD_SCAN     (keyboard_scan),
+	.KEYBOARD_RESPONSE (keyboard_response)
+);
+
 pokey the_penguin (
 	.CLK                  (clk_sys),
 	.ENABLE_179           (pclk0),
@@ -301,9 +330,9 @@ pokey the_penguin (
 	.DATA_IN              (din),
 	.WR_EN                (~rw & pokey_cs),
 	.RESET_N              (~reset),
-	.keyboard_scan_enable (),
-	.keyboard_scan        (),
-	.keyboard_response    (),
+	.keyboard_scan_enable (old_ps2_10 != ps2_key[10]),
+	.keyboard_scan        (keyboard_scan),
+	.keyboard_response    (keyboard_response),
 
 	.POT_IN               (),
 	.SIO_IN1              (),
@@ -314,6 +343,38 @@ pokey the_penguin (
 	.CHANNEL_1_OUT        (ch1),
 	.CHANNEL_2_OUT        (ch2),
 	.CHANNEL_3_OUT        (ch3),
+
+	.IRQ_N_OUT            (),
+	.SIO_OUT1             (),
+	.SIO_OUT2             (),
+	.SIO_OUT3             (),
+	.SIO_CLOCKIN_IN       (),
+	.SIO_CLOCKIN_OUT      (),
+	.SIO_CLOCKIN_OE       (),
+	.SIO_CLOCKOUT         (),
+	.POT_RESET            ()
+);
+
+pokey return_of_pokey (
+	.CLK                  (clk_sys),
+	.ENABLE_179           (pclk0),
+	.ADDR                 (address_in[3:0]),
+	.DATA_IN              (din),
+	.WR_EN                (~rw & pokey2_cs),
+	.RESET_N              (~reset),
+	.keyboard_scan_enable (),
+	.keyboard_scan        (),
+	.keyboard_response    (),
+
+	.POT_IN               (),
+	.SIO_IN1              (),
+	.SIO_IN2              (),
+	.SIO_IN3              (),
+	.DATA_OUT             (pokey2_dout),
+	.CHANNEL_0_OUT        (ch0_2),
+	.CHANNEL_1_OUT        (ch1_2),
+	.CHANNEL_2_OUT        (ch2_2),
+	.CHANNEL_3_OUT        (ch3_2),
 
 	.IRQ_N_OUT            (),
 	.SIO_OUT1             (),

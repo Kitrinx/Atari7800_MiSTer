@@ -1,30 +1,28 @@
-// (C) Jamie Blanks, 2021
-
-// For MiSTer use only.
-
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+/************************************************************************
+* (C) Jamie Blanks, 2021                                                *
+*                                                                       *
+* This program is free software: you can redistribute it and/or modify  *
+* it under the terms of the GNU General Public License as published by  *
+* the Free Software Foundation, either version 3 of the License, or     *
+* (at your option) any later version.                                   *
+*                                                                       *
+* This program is distributed in the hope that it will be useful,       *
+* but WITHOUT ANY WARRANTY; without even the implied warranty of        *
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
+* GNU General Public License for more details.                          *
+*                                                                       *
+* You should have received a copy of the GNU General Public License     *
+* along with this program.  If not, see <https://www.gnu.org/licenses/>.*
+************************************************************************/
 
 `include "atari7800.vh"
 
 module maria(
 	output logic        mclk0,
 	output logic        mclk1,
-	input  logic        halt_unlock,
 	input  logic [15:0] AB_in,
 	output logic [15:0] AB_out,
-	output logic        drive_AB,
-	input  logic [1:0]  pal_temp,
-	input  logic        hide_border,
-	input  logic        bypass_bios,
+
 	input  logic        PAL,
 
 	input  logic  [7:0] read_DB_in,
@@ -37,9 +35,6 @@ module maria(
 	// Clocking
 	input logic         reset,
 	input logic         clk_sys, 
-	output logic        tia_clk, 
-	output logic        tia_cpu_clk,
-	output logic        sel_slow_clock, 
 
 	// Memory Map Select lines
 	output `chipselect  CS,
@@ -52,26 +47,23 @@ module maria(
 
 	// VGA Interface
 	output logic [7:0]  YC,
-	output logic [7:0]  red,
-	output logic [7:0]  green,
-	output logic [7:0]  blue,
 	output logic        hsync,
 	output logic        vsync,
 	output logic        hblank,
 	output logic        vblank,
 	output logic        vblank_ex,
-	output logic [12:0] cpu_ticks,
-	output logic [12:0] halted_ticks,
-	output logic [12:0] driven_ticks,
 
 	// Outputs to 6502
-	output logic        int_b,
-	output logic        halt_b,
-	output logic        ready
+	output logic        NMI_n,
+	output logic        halt_n,
+	output logic        ready,
+
+	// Abstract Pins
+	output logic        drive_AB,
+	input  logic        hide_border,
+	input  logic        bypass_bios
 );
 
-	assign halt_b = ~halt_en && ~((vbe || hbs) & dma_en);
-	assign tia_cpu_clk = pclk_toggle;
 	/* Original Pins:
 		A0-A15        memory address bus
 		D0-D7         memory data bus
@@ -97,65 +89,47 @@ module maria(
 		SYNC          video sync output
 	*/
 
-	//// Memory Mapped Registers
-	// Control register format:
-	// {CK, DM1, DM0, CW, BC, KM, RM1, RM0}
-	// CK: Color Kill
-	// {DM1, DM0}: DMA Control. 0: Test A. 1: Test B.
-	//                          2: Normal DMA. 3: No DMA.
-	// CW: Character Width (For indirect mode). 0=>2bytes. 1=>1byte.
-	// BC: Border Control: 0=>Black Border. 1=>Background Color.
-	// KM: Kangaroo Mode: 0=>Transparency, 1=>No transparency
-	// {RM1, RM0}: Read mode.
 	logic [7:0]       ctrl;
 	logic [24:0][7:0] color_map;
 	logic [7:0]       char_base;
 	logic [15:0]      ZP;
-
-	logic deassert_ready;	
-	logic [3:0] reset_delay;
-	logic border;
-	logic prst;
-	logic vbe;
-	logic hbs;
-	logic lrc;
-	logic [2:0] palette;
-	logic wm;
-	logic [7:0] hpos;
-	logic clear_hpos;
-	logic halt_en;
-	logic DLI_en;
-	logic dli_latch;
-	logic [1:0] edge_counter;
-	logic clk_toggle;
-	logic old_dli;
-	logic [2:0] clock_div, clock_p1_div;
-	logic latch_byte;
-	logic ctrl_written;
-	logic pclk_toggle;
-	logic old_ssc;
-	logic [1:0] zp_written;
-	logic [7:0] UV_out;
-
+	logic [2:0]       palette;
+	logic [1:0]       zp_written;
+	logic [7:0]       UV_out;
+	logic [2:0]       clock_div;
+	logic [7:0]       hpos;
+	logic [1:0]       edge_counter;
+	logic [7:0]       pal_counter;
+	logic             deassert_ready;	
+	logic             border;
+	logic             prst;
+	logic             vbe;
+	logic             hbs;
+	logic             lrc;
+	logic             wm;
+	logic             clear_hpos;
+	logic             halt_en;
+	logic             DLI_en;
+	logic             dli_latch;
+	logic             clk_toggle;
+	logic             old_dli;
+	logic             latch_byte;
+	logic             pclk_toggle;
+	logic             sel_slow_clock;
+	logic             NMI_ung_n;
+	logic             slow_clk_latch;
+	// Apply color kill if needed
 	assign YC = UV_out & (ctrl[7] ? 8'h0F : 8'hFF);
 
-	// Normally this would be one cpu cycle, but T65 appears to
-	// need this low for two cpu cycles to take action. It's edge triggered
-	// so c'est la vie, won't cause problems.
-	assign int_b = ~(edge_counter == 1 || edge_counter == 2);
+	assign halt_n = ~halt_en;
 
-	wire dma_en = (ctrl[6:5] == 2'b10) && &zp_written;
+	// Maria being enabled is a condition for NMI
+	assign NMI_n = NMI_ung_n || ~maria_en;
 
-	wire PCLKEDGE = clock_div == 1 && pclk_toggle;
-
-
-	logic [7:0] pal_counter;
+	wire dma_en = (ctrl[6:5] == 2'b10);
 
 	always @(posedge clk_sys) begin
 		if (reset) begin
-			edge_counter <= 2'd3;
-			dli_latch <= 0;
-			old_dli <= 0;
 			ready <= 1;
 			clock_div <= 0;
 			clk_toggle <= 0;
@@ -165,12 +139,8 @@ module maria(
 			mclk0 <= 0;
 			pclk0 <= 0;
 			pclk1 <= 0;
-			old_ssc <= 0;
+			slow_clk_latch <= 0;
 		end else begin
-			if (mclk1)
-				tia_clk <= 1;
-			else if (mclk0)
-				tia_clk <= 0;
 			// if (PAL)
 			// 	pal_counter <= pal_counter + 1'd1;
 			// else
@@ -187,33 +157,6 @@ module maria(
 				clk_toggle <= ~clk_toggle;
 			end
 
-			old_dli <= DLI_en;
-
-			if (~old_dli & DLI_en) begin
-				dli_latch <= 1;
-				edge_counter <= 0;
-			end
-
-			if (pclk0 && halt_b)
-				cpu_ticks <= cpu_ticks + 1'd1;
-			if (mclk0) begin
-				if (halt_en) halted_ticks <= halted_ticks + 1'd1;
-				if (drive_AB) driven_ticks <= driven_ticks + 1'd1;
-			end
-			if (lrc) begin
-				cpu_ticks <= 0;
-				halted_ticks <= 0;
-				driven_ticks <= 0;
-			end
-
-
-			if (pclk1 && halt_b) begin
-				if (~&edge_counter && dli_latch)
-					edge_counter <= edge_counter + 1'd1;
-				if (edge_counter == 3)
-					dli_latch <= 0;
-			end
-
 			if (deassert_ready)
 				ready <= 1'b0;
 			else if (lrc)
@@ -222,20 +165,17 @@ module maria(
 			pclk0 <= 0;
 			pclk1 <= 0;
 
+			if (pclk_toggle)
+				slow_clk_latch <= sel_slow_clock;
+
 			if (mclk1) begin
-				old_ssc <= sel_slow_clock;
 				if (clock_div)
 					clock_div <= clock_div - 1'd1;
 				else begin
 					pclk_toggle <= ~pclk_toggle;
 					pclk1 <= pclk_toggle;
 					pclk0 <= ~pclk_toggle;
-					clock_div <= sel_slow_clock ? 3'd2 : 2'd1;
-				end
-				if (old_ssc != sel_slow_clock) begin
-					// In theory this should only happen 1 cycle after pclk1
-					// when the addresses change.
-					clock_div <= sel_slow_clock ? 3'd1 : 2'd0;
+					clock_div <= (~pclk_toggle ? sel_slow_clock : slow_clk_latch) ? 3'd2 : 2'd1;
 				end
 			end
 		end
@@ -248,7 +188,7 @@ module maria(
 		.clk_sys       (clk_sys),
 		.latch_byte    (latch_byte),
 		.clear_hpos    (clear_hpos),
-		.RESET         (reset),
+		.RESET         (reset || ~maria_en),
 		.PLAYBACK      (UV_out),
 		.hpos          (hpos),
 		.PALETTE       (palette),
@@ -271,13 +211,11 @@ module maria(
 		.AB             (AB_in),
 		.DB_in          (write_DB_in),
 		.DB_out         (DB_out),
-		.halt_b         (halt_b),
-		.we_b           (RW),
+		.RW             (RW),
 		.cs             (CS),
 		.bios_en        (bios_en),
 		.drive_AB       (drive_AB),
 		.ctrl           (ctrl),
-		.zp_written     (zp_written),
 		.color_map      (color_map),
 		.status_read    ({vblank, 7'b0}),
 		.char_base      (char_base),
@@ -285,23 +223,24 @@ module maria(
 		.pal            (PAL),
 		.sel_slow_clock (sel_slow_clock),
 		.deassert_ready (deassert_ready),
-		.sysclock       (clk_sys),
+		.clk_sys        (clk_sys),
 		.reset_b        (~reset),
-		.pclk0          (pclk2)
+		.pclk0          (pclk2),
+		.bypass_bios    (bypass_bios)
 	);
 
 	dma_ctrl dma_ctrl_inst (
 		.clk_sys         (clk_sys),
-		.reset           (reset),
+		.reset           (reset || ~maria_en),
 		.mclk0           (mclk0),
 		.mclk1           (mclk1),
-		.PCLKEDGE        (PCLKEDGE),
 		.vblank          (vblank),
 		.vbe             (vbe),
 		.hbs             (hbs),
 		.lrc             (lrc),
 		.dma_en          (dma_en),
 		.pclk1           (pclk1),
+		.pclk0           (pclk0),
 		.AddrB           (AB_out),
 		.drive_AB        (drive_AB),
 		.latch_byte      (latch_byte),
@@ -314,14 +253,16 @@ module maria(
 		.PAL             (palette),
 		.ZP              (ZP),
 		.character_width (ctrl[4]),
-		.char_base       (char_base)
+		.char_base       (char_base),
+		.bypass_bios     (bypass_bios),
+		.nmi_n           (NMI_ung_n)
 	);
 
 	video_sync sync (
 		.mclk0       (mclk0),
 		.mclk1       (mclk1),
 		.clk         (clk_sys),
-		.reset       (reset),
+		.reset       (reset || ~maria_en),
 		.bypass_bios (bypass_bios),
 		.PAL         (PAL),
 		.HSync       (hsync),
@@ -338,4 +279,3 @@ module maria(
 	);
 
 endmodule
-

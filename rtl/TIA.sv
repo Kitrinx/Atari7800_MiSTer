@@ -1,8 +1,7 @@
 // Princess TIA
-// Copyright Jamie Dickson, 2019 - 2020
+// Copyright Jamie Dickson, 2019 - 2021
 // Based on Stella Programmer's Guide and TIA schematics, and verified with Stella Emulator
 
-// Enum ripped strait from Stella. Thanks man.
 typedef enum bit [5:0] {
 	VSYNC   = 6'h00,  // Write: vertical sync set-clear (D1)
 	VBLANK  = 6'h01,  // Write: vertical blank set-clear (D7-6,D1)
@@ -49,6 +48,7 @@ typedef enum bit [5:0] {
 	HMOVE   = 6'h2a,  // Write: apply horizontal motion (strobe)
 	HMCLR   = 6'h2b,  // Write: clear horizontal motion registers (strobe)
 	CXCLR   = 6'h2c,  // Write: clear collision latches (strobe)
+	ENBLO   = 6'h3D,  // Not a real register, used for ENABL OLD
 	GRP0O   = 6'h3E,  // Not a real register, used for GPR0 storage
 	GRP1O   = 6'h3F   // Not a real register, used for GPR1 storage
 } write_registers;
@@ -139,7 +139,7 @@ always_comb begin
 			6'b111111: err = 1;    // Error
 			6'b010100: shb = 1;    // End (Set Hblank)
 			6'b110111: rhs = 1;    // Reset HSync
-			6'b101100: cnt = 1;    // Center
+			6'b101100: cnt = 1;    // Center // 101001?
 			6'b001111: rcb = 1;    // Reset Color Burst
 			6'b111100: shs = 1;    // Set Hsync
 			6'b011100: rhb = 1;    // Reset HBlank
@@ -147,7 +147,7 @@ always_comb begin
 			default: {err, wsr, shb, rhs, cnt, rcb, shs, lrhb, rhb} = 0;
 	endcase
 
-// 	if (rsync)
+// 	if (rsync)111011 000100
 // 		shb = 1;
 end
 
@@ -286,7 +286,7 @@ always_ff @(posedge clk) begin : phi0_gen
 
 	if (reset) begin
 		rsync_latch <= 0;
-		cc_tog <= 1;
+		cc_tog <= 0;
 		phi_clear <= 0;
 		phi_div <= 0;
 		hp_cnt <= 0;
@@ -317,11 +317,11 @@ module hmove_gen
 );
 	logic p0ec, p1ec, m0ec, m1ec, blec;
 
-	assign p0_mclk = ~hblank | (p0ec & HP1);
-	assign p1_mclk = ~hblank | (p1ec & HP1);
-	assign m0_mclk = ~hblank | (m0ec & HP1);
-	assign m1_mclk = ~hblank | (m1ec & HP1);
-	assign bl_mclk = ~hblank | (blec & HP1);
+	assign p0_mclk = ~hblank | p0ec & HP1;
+	assign p1_mclk = ~hblank | p1ec & HP1;
+	assign m0_mclk = ~hblank | m0ec & HP1;
+	assign m1_mclk = ~hblank | m1ec & HP1;
+	assign bl_mclk = ~hblank | blec & HP1;
 
 	always @(posedge clk) begin : hmove_block
 		logic [3:0] hmove_cnt;
@@ -336,10 +336,9 @@ module hmove_gen
 		end
 
 		if (HP2) begin
-			if (|hmove_cnt | sec)
+			if (sec || |hmove_cnt)
 				hmove_cnt <= hmove_cnt + 1'd1;
-
-			// Can be overwritten below
+			
 			if (sec)
 				{p0ec, p1ec, m0ec, m1ec, blec} <= 5'b11111;
 
@@ -353,7 +352,6 @@ module hmove_gen
 				m1ec <= 0;
 			if (bl_m[3:0] == {~hmove_cnt[3], hmove_cnt[2:0]})
 				blec <= 0;
-
 		end
 	end
 
@@ -817,11 +815,12 @@ module TIA2
 	input        phi2,
 	output logic phi1,
 	input        RW_n,
-	output logic   rdy,
+	output logic rdy,
 	input  [5:0] addr,
 	input  [7:0] d_in,
 	output [7:0] d_out,
 	input  [3:0] i,     // On real hardware, these would be ADC pins. i0..3
+	output [3:0] i_out,
 	input        i4,
 	input        i5,
 	output [3:0] aud0,
@@ -842,7 +841,9 @@ module TIA2
 	output       hgap,
 	output       vsync,
 	output       hsync,
-	output       phi2_gen
+	output       phi2_gen,
+	input        phi1_in,
+	input [7:0]  open_bus
 );
 
 logic [7:0] wreg[64]; // Write registers. Only 44 are used.
@@ -864,7 +865,7 @@ logic rhb, shb, wsr, shbd; // Hblank triggers
 assign cs = ~cs0_n & ~cs2_n;
 assign video_ce = cc;
 
-assign d_out[5:0] = 6'h00;
+//assign d_out[5:0] = 6'h00;
 assign BLK_n = ~(hblank | vblank);
 assign sync = ~(hsync | vsync);
 assign vsync = wreg[VSYNC][1];
@@ -874,28 +875,43 @@ assign vblank = wreg[VBLANK][1];
 // Register writes happen when Phi2 falls, or in our context, when Phi0 rises.
 // Register reads happen when Phi2 is high. This is relevant in particular to RIOT which is clocked on Phi2.
 
+logic [7:0] last_bus_value;
+
+// Read port masks
+logic [1:0] rpm [16];
+assign rpm = '{
+	2'b11, 2'b11, 2'b11, 2'b11, 2'b11, 2'b11,
+	2'b10,
+	2'b11,
+	2'b10, 2'b10, 2'b10, 2'b10, 2'b10, 2'b10,
+	2'b00, 2'b00
+};
+
+assign d_out[5:0] = open_bus[5:0];
+
 always @(posedge clk) begin
+	i_out <= {4{~wreg[VBLANK][7]}};
 	if (phi2) begin
-		d_out[7:6] <= 2'b00; // Should be open bus if invalid reg
 		if (cs & RW_n) begin
-			if (addr[3:0] == INPT4 && ~wreg[VBLANK][6])
-				d_out[7:6] <= {i4, 1'b0};
-			else if (addr[3:0] == INPT5 && ~wreg[VBLANK][6])
-				d_out[7:6] <= {i5, 1'b0};
-			else
-				d_out[7:6] <= rreg[addr[3:0]][7:6]; // reads only use the lower 4 bits of addr
+			if (addr[3:0] == INPT4 && ~wreg[VBLANK][6]) begin
+				d_out[7:6] <= {i4, 1'b0} | (open_bus[7:6] & ~rpm[addr[3:0]]);
+			end else if (addr[3:0] == INPT5 && ~wreg[VBLANK][6]) begin
+				d_out[7:6] <= {i5, 1'b0} | (open_bus[7:6] & ~rpm[addr[3:0]]);
+			end else if (~&addr[3:1]) begin
+				d_out[7:6] <= rreg[addr[3:0]][7:6] | (open_bus[7:6] & ~rpm[addr[3:0]]); // reads only use the lower 4 bits of addr
+			end else
+				d_out[7:6] <= open_bus[7:6];
 		end
 	end
-end
 
-always @(posedge clk) begin
-
-	if (phi2 & cs & ~RW_n && addr <= 6'h2C) begin
+	if (phi2 && cs && ~RW_n && addr <= 6'h2C) begin
 		wreg[addr] <= d_in;
 		if (addr == GRP0)
 			wreg[GRP0O] <= wreg[GRP0];
 		if (addr == GRP1)
 			wreg[GRP1O] <= wreg[GRP1];
+		if (addr == ENABL)
+			wreg[ENBLO] <= wreg[ENABL];
 
 	end
 
@@ -913,12 +929,11 @@ end
 
 // "Strobe" registers have an immediate effect
 always @(posedge clk) begin
-	//{wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr} = '0;
 	if (HP1) begin
 		{wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr} <= '0;
 	end
 
-	if (~RW_n && phase && cs) begin
+	if (~RW_n && phi2 && cs) begin
 		case(addr)
 			WSYNC: wsync <= 1;
 			RSYNC: rsync <= 1;
@@ -930,7 +945,7 @@ always @(posedge clk) begin
 			HMOVE: hmove <= 1;
 			HMCLR: hmclr <= 1;
 			CXCLR: cxclr <= 1;
-			//default: {wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr} = '0;
+			default: ;
 		endcase
 	end
 end
@@ -966,7 +981,7 @@ clockgen clockgen
 	.clk      (clk),
 	.ce       (ce),
 	.CC       (cc),
-	.res0d   (res0d),
+	.res0d    (res0d),
 	.phi0     (phi0),
 	.phi1     (phi1),
 	.phi2_gen (phi2_gen),
@@ -1020,18 +1035,109 @@ hmove_gen hmv
 	.HP2     (HP2),
 	.hmove   (hmove),
 	.hblank  (hblank),
-	.p0_m    (wreg[HMP0]),
-	.p1_m    (wreg[HMP1]),
-	.m0_m    (wreg[HMM0]),
-	.m1_m    (wreg[HMM1]),
-	.bl_m    (wreg[HMBL]),
+	.p0_m    (wreg[HMP0][7:4]),
+	.p1_m    (wreg[HMP1][7:4]),
+	.m0_m    (wreg[HMM0][7:4]),
+	.m1_m    (wreg[HMM1][7:4]),
+	.bl_m    (wreg[HMBL][7:4]),
 	.p0_mclk (p0ec),
 	.p1_mclk (p1ec),
 	.m0_mclk (m0ec),
 	.m1_mclk (m1ec),
 	.bl_mclk (blec)
 );
+// -- 	p0: work.player
+// -- 		port map(clk, p0_rst, p0_count, p0_nusiz, p0_reflect,
+// -- 					p0_grpnew, p0_grpold, p0_vdel, p0_mrst, p0_pix);
+logic msrst0, msrst1;
+player play1 (
+	.clk     (cc),
+	.prst    (resp0),
+	.count   (p0ec),
+	.nusiz   (wreg[NUSIZ0][2:0]),
+	.reflect (wreg[REFP0][3]),
+	.grpnew  (wreg[GRP0]),
+	.grpold  (wreg[GRP0O]),
+	.vdel    (wreg[VDELP0]),
+	.mrst    (msrst0),
+	.pix     (p0)
+);
 
+player play2 (
+	.clk     (cc),
+	.prst    (resp1),
+	.count   (p1ec),
+	.nusiz   (wreg[NUSIZ1][2:0]),
+	.reflect (wreg[REFP1][3]),
+	.grpnew  (wreg[GRP1]),
+	.grpold  (wreg[GRP1O]),
+	.vdel    (wreg[VDELP1]),
+	.mrst    (msrst1),
+	.pix     (p1)
+);
+
+missile mis1 (
+	.clk    (cc),
+	.prst   (resm0 || (wreg[RESMP0][1] && msrst0)),
+	.count  (m0ec),
+	.enable (wreg[ENAM0][1]),
+	.nusiz  (wreg[NUSIZ0][2:0]),
+	.size   (wreg[NUSIZ0][5:4]),
+	.pix    (m0)
+);
+
+missile mis2 (
+	.clk    (cc),
+	.prst   (resm1|| (wreg[RESMP1][1] && msrst1)),
+	.count  (m1ec),
+	.enable (wreg[ENAM1][1]),
+	.nusiz  (wreg[NUSIZ1][2:0]),
+	.size   (wreg[NUSIZ1][5:4]),
+	.pix    (m1)
+);
+// tia_missile_obj missile0
+// (
+// 	.clk           (clk),
+// 	.mis_mot       (m0ec),
+// 	.adv_obj       (~hblank),
+// 	.pix_clk       (cc),
+// 	.reset_sys     (rst),
+// 	.mis_num       (wreg[NUSIZ0][2:0]),
+// 	.mis_siz       (wreg[NUSIZ0][5:4]),
+// 	.mis_ena       (wreg[ENAM0][1]),
+// 	.m2p_ena       (m2p_ena),
+// 	.resmis        (resm0),
+// 	.m2p_reset     (m2pr0),
+// 	.g_mis         (m0)
+// );
+
+// tia_missile_obj missile1
+// (
+// 	.clk           (clk),
+// 	.mis_mot       (m1ec),
+// 	.adv_obj       (~hblank),
+// 	.pix_clk       (cc),
+// 	.reset_sys     (rst),
+// 	.mis_num       (wreg[NUSIZ1][2:0]),
+// 	.mis_siz       (wreg[NUSIZ1][5:4]),
+// 	.mis_ena       (wreg[ENAM1][1]),
+// 	.m2p_ena       (m2p_ena2),
+// 	.resmis        (resm1),
+// 	.m2p_reset     (m2pr1),
+// 	.g_mis         (m1)
+// );
+
+
+ball bal (
+	.clk   (cc),
+	.prst  (resbl),
+	.count (blec),
+	.ennew (wreg[ENABL][1]),
+	.enold (wreg[ENBLO][1]),
+	.vdel  (wreg[VDELBL]),
+	.size  (wreg[CTRLPF][5:4]),
+	.pix   (bl)
+);
 
 // player_o player0
 // (
@@ -1065,54 +1171,6 @@ hmove_gen hmv
 
 logic m2pr0, m2pr1;
 
-tia_player_obj player0
-(
-	.clk           (clk),
-	.pix_clk       (cc),
-	.pl_mot        (p0ec),
-	.adv_obj       (~hblank),
-	.reset_sys     (rst),
-	.nusiz         (wreg[NUSIZ0][2:0]),
-	.pl_refl       (wreg[REFP0][3]),
-	.pl_vdel       (wreg[VDELP0]),
-	.play_new      (wreg[GRP0]),
-	.play_old      (wreg[GRP0O]),
-	.respl         (resp0),
-	.m2p_reset     (m2pr0),//wreg[RESMP0][1]
-	.g_pl          (p0)
-);
-
-tia_player_obj player1
-(
-	.clk           (clk),
-	.pix_clk       (cc),
-	.pl_mot        (p1ec),
-	.adv_obj       (~hblank),
-	.reset_sys     (rst),
-	.nusiz         (wreg[NUSIZ1][2:0]),
-	.pl_refl       (wreg[REFP1][3]),
-	.pl_vdel       (wreg[VDELP1]),
-	.play_new      (wreg[GRP1]),
-	.play_old      (wreg[GRP1O]),
-	.respl         (resp1),
-	.m2p_reset     (m2pr1),//wreg[RESMP0][1]
-	.g_pl          (p1)
-);
-
-// tia_player_obj player1
-// (
-// 	.clk           (),
-// 	.pix_clk       (),
-// 	.reset_sys     (),
-// 	.nusiz         (),
-// 	.pl_refl       (),
-// 	.pl_vdel       (),
-// 	.play_new      (),
-// 	.play_old      (),
-// 	.respl         (),
-// 	.m2p_reset     (),
-// 	.g_pl          ()
-// );
 
 // missile_o missile0
 // (
@@ -1125,72 +1183,6 @@ tia_player_obj player1
 // );
 
 logic m2p_ena, m2p_ena2;
-
-tia_missile_obj missile0
-(
-	.clk           (clk),
-	.mis_mot       (m0ec),
-	.adv_obj       (~hblank),
-	.pix_clk       (cc),
-	.reset_sys     (rst),
-	.mis_num       (wreg[NUSIZ0][2:0]),
-	.mis_siz       (wreg[NUSIZ0][5:4]),
-	.mis_ena       (wreg[ENAM0][1]),
-	.m2p_ena       (m2p_ena),
-	.resmis        (resm0),
-	.m2p_reset     (m2pr0),
-	.g_mis         (m0)
-);
-
-tia_missile_obj missile1
-(
-	.clk           (clk),
-	.mis_mot       (m1ec),
-	.adv_obj       (~hblank),
-	.pix_clk       (cc),
-	.reset_sys     (rst),
-	.mis_num       (wreg[NUSIZ1][2:0]),
-	.mis_siz       (wreg[NUSIZ1][5:4]),
-	.mis_ena       (wreg[ENAM1][1]),
-	.m2p_ena       (m2p_ena2),
-	.resmis        (resm1),
-	.m2p_reset     (m2pr1),
-	.g_mis         (m1)
-);
-
-
-// tia_missile_obj missile1
-// (
-// 	.clk           (),
-// 	.pix_clk       (),
-// 	.reset_sys     (),
-// 	.mis_num       (),
-// 	.mis_siz       (),
-// 	.mis_ena       (),
-// 	.m2p_ena       (),
-// 	.resmis        (),
-// 	.m2p_reset     (),
-// 	.g_mis         ()
-// );
-
-// tia_ball_obj ball
-// (
-// 	.clk           (),
-// 	.pix_clk       (),
-// 	.reset_sys     (),
-// 	.ball_mot      (),
-// 	.adv_obj       (),
-// 	.enabl_n       (),
-// 	.resbl         (),
-// 	.pf_bsize      (),
-// 	.g_bl          ()
-// );
-
-	// -- These signals move the object counter
-	// -- for synthesis applications ;)
-	// pl_mot        : in  std_logic;
-	// adv_obj       : in  std_logic;
-
 
 
 // missile_o missile1
@@ -1295,7 +1287,7 @@ always_ff @(posedge clk) begin : read_reg_block
 	if (rst) begin
 		rreg <= '{16{8'h00}};
 
-	end else if (phi0) begin
+	end else if (HP2) begin // FIXME this should always be implicitly opposite phi2 for reads.
 		if (cxclr) begin
 			{rreg[CXM0P][7:6], rreg[CXM1P][7:6], rreg[CXP0FB][7:6],
 				rreg[CXP1FB][7:6], rreg[CXM0FB][7:6], rreg[CXM1FB][7:6],
@@ -1314,11 +1306,13 @@ always_ff @(posedge clk) begin : read_reg_block
 		// Analog input requires simulating the capacitor recharge of the paddle
 		// circuit. This generally takes 1 hsync per (196 - (value / 2)) of the given input port.
 		for (x = 0; x < 4; x = x + 1'd1) begin
-			rreg[{2'b10, x[1:0]}][7] <= wreg[VBLANK][7] ? 1'b0 : i[x[1:0]];
+			rreg[{2'b10, x[1:0]}][7] <= /*wreg[VBLANK][7] ? 1'b0 : */ i[x[1:0]];
 			//rreg[{2'b10, x[1:0]}][7] <= ((8'd196 - i[x[1:0]][7:1]) <= icount);
 		end
 	end
 
+	// if (phi2 && ~RW_n && cs && addr == VBLANK && d_in[6])
+	// 	{rreg[INPT4][7], rreg[INPT5][7]} <= '1;
 	if (~wreg[VBLANK][6]) begin
 		{rreg[INPT4][7], rreg[INPT5][7]} <= '1;
 	end else begin

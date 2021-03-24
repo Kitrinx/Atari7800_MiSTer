@@ -24,6 +24,8 @@
 
 */
 
+// altera message_off 10030
+
 module jt51_phrom
 (
 	input [4:0] addr,

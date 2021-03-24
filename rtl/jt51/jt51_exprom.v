@@ -25,6 +25,8 @@
 
 */
 
+// altera message_off 10030
+
 module jt51_exprom
 (
     input [4:0]         addr,

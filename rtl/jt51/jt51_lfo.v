@@ -18,6 +18,8 @@
     Date: 27-10-2016
     */
 
+// altera message_off 10030
+
 module jt51_lfo(
     input               rst,
     input               clk,

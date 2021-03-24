@@ -80,7 +80,8 @@ entity cart2600 is
 		force_bs  : in  std_logic_vector(3 downto 0); -- forced bank switch type
 		rom_a     : out std_logic_vector(15 downto 0);
 		rom_do    : in  std_logic_vector(7 downto 0);
-		rom_size  : in  std_logic_vector(16 downto 0)
+		rom_size  : in  std_logic_vector(16 downto 0);
+		open_bus  : in  std_logic_vector(7 downto 0)
 
 	);
 end cart2600;
@@ -225,7 +226,7 @@ sc_a <= clr_a                                when rst = '1'    else
         "0000" & cpu_a(6 downto 0);
 
 -- ROM and SC output
-process(cpu_a, rom_do, sc_d_out, sc, bss, DpcFlags, DpcRandom, DpcMusicModes, DpcMusicFlags, soundAmplitudes, e7_bank0)
+process(cpu_a, rom_do, sc_d_out, sc, bss, DpcFlags, DpcRandom, DpcMusicModes, DpcMusicFlags, soundAmplitudes, e7_bank0, open_bus)
 	variable ampI_v :std_logic_vector(2 downto 0);
 	variable masked0_v :std_logic_vector(7 downto 0);
 	variable masked1_v :std_logic_vector(7 downto 0);
@@ -276,8 +277,8 @@ begin
 --		cpu_d_out <= "ZZZZZZZZ";
 	elsif (cpu_a(12) = '1') then
 		cpu_d_out <= rom_do;
-	-- else
-	-- 	cpu_d_out <= "00000000";
+	else
+		cpu_d_out <= open_bus;
 	end if;
 end process;
 

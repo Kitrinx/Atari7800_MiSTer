@@ -93,7 +93,6 @@ module video_sync (
 	input logic        PAL,
 	input logic        bypass_bios,
 
-	output logic [9:0] row, col,
 	output logic       HSync, VSync,
 	output logic       hblank, vblank, vblank_ex,
 	output logic       border,
@@ -103,18 +102,18 @@ module video_sync (
 	output logic       hbs   // hblank start
 );
 
-logic visible;
+logic [8:0] row, col;
 
-localparam MAX_ROW      = 10'd262;
-localparam MAX_ROW_PAL  = 10'd312;
-localparam MAX_COLUMN   = 10'd453;
+localparam MAX_ROW      = 9'd262;
+localparam MAX_ROW_PAL  = 9'd312;
+localparam MAX_COLUMN   = 9'd453;
 
 localparam BORDER_START = 413;
 localparam BORDER_END = 93;
 localparam HBLANK_START = 440;
 localparam HBLANK_END = 68;
 localparam HSYNC_START = 0;
-localparam HSYNC_END = 66;
+localparam HSYNC_END = 34; // Typo in schematic?
 localparam LINE_RESET_COUNT = 412;
 localparam RESET_PRST = 418; // wtf is this
 localparam HCBURSTS = 38;
@@ -136,21 +135,20 @@ assign vblank_ex  = (row >= (PAL ? VBLANK_EX_START_PAL : VBLANK_EX_START)) || (r
 assign HSync      = col < HSYNC_END;
 assign hblank     = hide_border ? border : ((col >= HBLANK_START) || (col < HBLANK_END));
 assign border     = (col >= BORDER_START) || (col < BORDER_END);
-assign visible    = ~(vblank | hblank);
 assign lrc        = (col == LINE_RESET_COUNT);
-assign vbe        = (row == VBLANK_END) && (col == 12);
+assign vbe        = (row == VBLANK_END) && (col == 0);
 assign hbs        = col == HBLANK_START;
 assign prst       = col == RESET_PRST;
 
 always_ff @(posedge clk) if (reset) begin
-	row <= bypass_bios ? 9'd38 : 9'd0;
+	row <= bypass_bios ? 9'd39 : 9'd0;
 	col <= bypass_bios ? 9'd255 : 9'd0;
 end else if (mclk0) begin
-	col <= col + 10'd1;
+	col <= col + 9'd1;
 
 	if (col >= MAX_COLUMN) begin
 		col <= 0;
-		row <= row + 10'd1;
+		row <= row + 9'd1;
 
 		if (row >= (PAL ? MAX_ROW_PAL : MAX_ROW))
 			row <= 0;

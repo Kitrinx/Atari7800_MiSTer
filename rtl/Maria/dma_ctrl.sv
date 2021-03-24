@@ -18,13 +18,13 @@ module dma_ctrl(
 	input logic         reset,
 	input  logic        mclk0,
 	input  logic        mclk1,
-	input  logic        PCLKEDGE,
 	input  logic        vblank,
 	input  logic        vbe,
 	input  logic        hbs,
 	input  logic        lrc,
 	input  logic        dma_en,
 	input  logic        pclk1,
+	input  logic        pclk0,
 	output logic [15:0] AddrB,
 	output logic        drive_AB,
 	output logic        latch_byte,
@@ -37,7 +37,10 @@ module dma_ctrl(
 	output logic [2:0]  PAL,
 	input logic [15:0]  ZP,
 	input logic         character_width,
-	input logic [7:0]   char_base
+	input logic [7:0]   char_base,
+	input logic         bypass_bios,
+	output logic [6:0]  sel_out,
+	output logic        nmi_n
 );
 
 typedef enum logic [4:0] {
@@ -112,29 +115,97 @@ logic shutting_down;
 logic [3:0] halt_cnt;
 logic vbe_trigger;
 
+// Note that Karateka inappropriately uses ROM space for it's DL list, which is not supposed
+// to be accessible in two cycles. For this reason I assert the addresses a cycle earlier to
+// deal with the situation.
+logic [6:0] sel, sel_last;
+logic [4:0] cond;
+
+// This arcane block of comparisons is a direct implementation of the state machine
+// that starts and stops DMA and controls NMI. In effect it waits for the first
+// falling edge of phi2 (aka phi1) with halt active, and then starts DMA.
+// Halt takes 1 phi1 tick to start, so ultimately it takes 2 cpu cycles to
+// start up.
+// Halt is actually asserted on the falling edge of vblank, or the rising edge of
+// (vblank & hblank), effectively making it happen at the end of every visible line.
+// If DMA is disabled, I believe halt is held in a continously reset state, so even
+// though the blanks attempt to asset it, it fails because of haltrst.
+
+// RSS0, RSS1
+// 1     0    = ZP DMA
+// 0     1    = DP DMA
+// 0     0    = End DMA
+// 1     1    = Invalid
+// DMA is disabled when HALTRST takes place, which occurs when RSS is 00 or DMA ends
+
+assign cond = {pclk1, HALT, DLI, |sel_last[5:1], |sel_last[2:1]};
+assign sel[6] = cond ==? 5'b1xx11;
+assign sel[5] = cond ==? 5'b11x00;
+assign sel[4] = cond ==? 5'bx1x10;
+assign sel[3] = cond ==? 5'b0x110;
+assign sel[2] = cond ==? 5'b10110;
+assign sel[1] = cond ==? 5'b0xx11;
+assign sel[0] = cond ==? 5'b1xx00;
+
+assign sel_out = sel;
+
+logic sel5_next;
+logic nmi_set;
+logic is_zp;
+
+logic [3:0] z_start, d_start, z_end, d_end;
+logic is_zp_dma;
+
+// Probes probe (
+// 	.source ({z_start, d_start, z_end, d_end}),
+// 	.probe (0)
+// );
+
 always_ff @(posedge clk_sys) if (reset) begin
+	// A few things reset differently if bios is disbled, so we can
+	// skip it without consequence.
+	DP <= bypass_bios ? 16'h1FFC : 16'd0;
+	DL_PTR <= bypass_bios ? 16'h1FFC : 16'd0;
+	ZONE_PTR <= bypass_bios ? 16'h1F84 : 16'd0;
+	OFFSET <= bypass_bios ? 4'hA : 4'd0;
 	state <= DMA_WAIT_ZP;
 	substate <= 0;
 	width_ovr <= 0;
 	shutting_down <= 1;
 	latch_byte <= 0;
+	{z_start, d_start, z_end, d_end} <= 16'h2223;
 	CHR_PTR <= 0;
-	DL_PTR <= 0;
 	PIX_PTR <= 0;
-	ZONE_PTR <= 0;
 	drive_AB <= 0;
 	wrote_one <= 0;
-	OFFSET <= 0;
 	vbe_trigger <= 0;
 	WM <= 0;
 	A12en <= 0;
 	A11en <= 0;
 	HALT <= 0;
+	is_zp <= 0;
+	nmi_n <= 1;
+	is_zp_dma <= 0;
 	DLI <= 0;
 	PAL <= 0;
+	sel_last <= 0;
+	nmi_set <= 0;
 	clear_hpos <= 0;
 end else if (mclk0) begin
-	if (hbs) begin
+	if (sel[6]) begin
+		nmi_n <= 0;
+		nmi_set <= 1;
+	end
+	if (sel[0]) begin
+		if (nmi_set) // Extend the NMI one extra tick so the 6502 sees it.
+			nmi_set <= 0;
+		else
+			nmi_n <= 1;
+	end 
+
+	sel_last <= sel;
+
+	if (hbs) begin // This starts on the rising edge of "blank" which stays true if either blank is true.
 		vbe_trigger <= 0;
 		if (dma_en && ~vblank)
 			HALT <= 1;
@@ -148,51 +219,51 @@ end else if (mclk0) begin
 		// Wait for starting condition
 		DMA_WAIT_DP,
 		DMA_WAIT_ZP: begin
-			if (pclk1) begin
-				if (HALT || ((vbe || (hbs & ~vblank)) & dma_en))
-					halt_cnt <= halt_cnt + 1'd1;
-				else
-					halt_cnt <= 0;
-				if (halt_cnt == 1) begin
-					substate <= 0;
-					drive_AB <= 1;
-					DLI <= 0;
 
-					if (vbe_trigger) begin
-						vbe_trigger <= 0;
-						ZONE_PTR <= ZP;
-						AddrB <= ZP;
-						shutting_down <= 1;
-						state <= DMA_START_ZP;
-					end else begin
-						DL_PTR <= DP;
-						AddrB <= DP;
-						shutting_down <= 0;
-						state <= DMA_START_DP;
-					end
+			if (sel[5]) begin
+				substate <= 0;
+				DLI <= 0;
+				is_zp <= 0;
 
+				if (vbe_trigger) begin // + 4 idle cycles
+					vbe_trigger <= 0;
+					ZONE_PTR <= ZP;
+					is_zp_dma <= 1;
+					AddrB <= ZP;
+					shutting_down <= 1;
+					state <= DMA_START_ZP;
+				end else begin         // + 8 idle cycles
+					DL_PTR <= DP;
+					AddrB <= DP;
+					is_zp_dma <= 0;
+					shutting_down <= 0;
+					state <= DMA_START_DP;
 				end
 			end
 		end
 
+		// Maria simply waits for the bus to be released
 		DMA_START_ZP:begin
 			substate <= substate + 1'd1;
-			if (substate >= 2) begin
+			if (substate >= z_start - 1'd1) begin
 				substate <= 0;
+				drive_AB <= 1;
 				state <= DMA_ZONE_END_0;
 			end
 		end
 
 		DMA_START_DP:begin
 			substate <= substate + 1'd1;
-			if (substate >= 3) begin
+			if (substate >= d_start - 1'd1) begin
 				substate <= 0;
+				drive_AB <= 1;
 				state <= DMA_HEADER_0;
 			end
 		end
 
-		DMA_HOLEY_COOLDOWN:begin
+		DMA_HOLEY_COOLDOWN:begin // Holey dma aborts on the first pixel fetch (not the char ptr fetch)
 			substate <= substate + 1'd1;
+			AddrB <= DL_PTR;
 			case (substate)
 				2: if (!IND) begin
 					substate <= 0;
@@ -205,7 +276,6 @@ end else if (mclk0) begin
 			endcase
 		end
 
-
 		// Fetch Address Low byte
 		DMA_HEADER_0: begin
 			substate <= substate + 1'd1;
@@ -216,6 +286,7 @@ end else if (mclk0) begin
 					width_ovr <= 0;
 					PIX_PTR[7:0] <= DataB;
 					DL_PTR <= DL_PTR + 1'd1;
+					AddrB <= DL_PTR + 1'd1;
 					state <= DMA_HEADER_1;
 					substate <= 0;
 				end
@@ -234,16 +305,9 @@ end else if (mclk0) begin
 					// for end-of-zone markers, not for 0.
 					if (~DataB[6] && ~|DataB[4:0]) begin// End of line
 						state <= DMA_ZONE_END_0;
+						AddrB <= ZONE_PTR;
 						if (OFFSET) begin
-							if (pclk1) begin
-								HALT <= 0;
-								OFFSET <= OFFSET - 1'd1;
-								state <= DMA_WAIT_DP;
-								latch_byte <= 0;
-								substate <= 0;
-								drive_AB <= 0;
-							end else
-								state <= DMA_END;
+							state <= DMA_END;
 						end
 						shutting_down <= 1;
 					end else if (~|DataB[4:0]) begin/// Long header
@@ -272,6 +336,7 @@ end else if (mclk0) begin
 					else
 						AHPO <= DataB + OFFSET;
 					DL_PTR <= DL_PTR + 1'd1;
+					AddrB <= DL_PTR + 1'd1;
 					state <= LONGHDR ? DMA_HEADER_3 : DMA_HEADER_4;
 					substate <= 0;
 				end
@@ -285,6 +350,7 @@ end else if (mclk0) begin
 				0: AddrB <= DL_PTR;
 				1: begin
 					DL_PTR <= DL_PTR + 1'd1;
+					AddrB <= DL_PTR + 1'd1;
 					{PAL, WIDTH} <= DataB;
 					state <= DMA_HEADER_4;
 					substate <= 0;
@@ -300,6 +366,7 @@ end else if (mclk0) begin
 				1: begin
 					clear_hpos <= 0;
 					DL_PTR <= DL_PTR + 1'd1;
+					AddrB <= DL_PTR + 1'd1;
 					HPOS <= DataB;
 					if (~IND)
 						WIDTH <= WIDTH + 1'd1;
@@ -374,35 +441,15 @@ end else if (mclk0) begin
 			endcase
 		end
 
-		// Decrement offset and terminate DMA
-		DMA_END: begin
-			if (pclk1) begin
-				HALT <= 0;
-				OFFSET <= OFFSET - 1'd1;
-				state <= DMA_WAIT_DP;
-				latch_byte <= 0;
-				substate <= 0;
-				drive_AB <= 0;
-			end
-		end
-
-		DMA_END_ZP: begin
-			if (pclk1) begin
-				HALT <= 0;
-				state <= DMA_WAIT_DP;
-				latch_byte <= 0;
-				substate <= 0;
-				drive_AB <= 0;
-			end
-		end
-
 		// Fetch DL header
 		DMA_ZONE_END_0: begin
+			is_zp <= 1;
 			substate <= substate + 1'd1;
 			case (substate)
 				0: AddrB <= ZONE_PTR;
 				1: begin
 					ZONE_PTR <= ZONE_PTR + 1'd1;
+					AddrB <= ZONE_PTR + 1'd1;
 					{DLI, A12en, A11en} <= DataB[7:5];
 					OFFSET <= DataB[3:0];
 					state <= DMA_ZONE_END_1;
@@ -417,6 +464,7 @@ end else if (mclk0) begin
 			case (substate)
 				0: AddrB <= ZONE_PTR;
 				1: begin
+					AddrB <= ZONE_PTR + 1'd1;
 					ZONE_PTR <= ZONE_PTR + 1'd1;
 					DP[15:8] <= DataB;
 					state <= DMA_ZONE_END_2;
@@ -433,22 +481,45 @@ end else if (mclk0) begin
 				1: begin
 					ZONE_PTR <= ZONE_PTR + 1'd1;
 					DP[7:0] <= DataB;
-					if (pclk1) begin
-						HALT <= 0;
-						state <= DMA_WAIT_DP;
-						latch_byte <= 0;
-						substate <= 0;
-						drive_AB <= 0;
-					end else
-						state <= DMA_END_ZP;
+					substate <= 0;
+					is_zp <= 1;
+					state <= is_zp_dma ? DMA_END_ZP : DMA_END;
 				end
 			endcase
 		end
 
+		// Maria waits to release the bus, then un-halts
+		DMA_END: begin
+			drive_AB <= 0;
+			substate <= substate + 1'd1;
+			if (substate >= d_end) begin
+				HALT <= 0;
+				if (~is_zp)
+					OFFSET <= OFFSET - 1'd1;
+				is_zp <= 0;
+				state <= DMA_WAIT_DP;
+				latch_byte <= 0;
+				substate <= 0;
+			end
+		end
+
+		DMA_END_ZP: begin
+			drive_AB <= 0;
+			substate <= substate + 1'd1;
+			if (substate >= z_end) begin
+				HALT <= 0;
+				is_zp <= 0;
+				is_zp_dma <= 0;
+				state <= DMA_WAIT_DP;
+				latch_byte <= 0;
+				substate <= 0;
+			end
+		end
+
 	endcase
 
-	// If we reach the line ram swap point, terminate DMA. This is a convienience to
-	// avoid a massive state machine surrounding this.
+	// If we reach the line ram swap point, aka the leading edge of border, terminate DMA. This is a
+	// convienience to avoid a massive state machine surrounding this.
 	if (lrc && dma_en && !shutting_down) begin
 		state <= OFFSET ? DMA_END : DMA_ZONE_END_0;
 		latch_byte <= 0;
@@ -456,7 +527,6 @@ end else if (mclk0) begin
 		clear_hpos <= 0;
 		shutting_down <= 1;
 	end
-		
 
 end
 

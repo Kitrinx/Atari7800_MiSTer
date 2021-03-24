@@ -41,28 +41,28 @@ logic [4:0]               lram_b_dout;
 logic                     ram_tog;
 logic [4:0]               lram_bus;
 
-wire erase_cell = playback_ix[0] && mclk0;
-assign lram_bus = ram_tog ? lram_a_dout : lram_b_dout;
+//wire erase_cell = playback_ix[0] && mclk0;
+// assign lram_bus = ram_tog ? lram_a_dout : lram_b_dout;
 
-spram #(.addr_width(8), .data_width (5), .mem_name("LRAMA")) lineram_a
-(
-	.clock   (clk_sys),
-	.address (ram_tog ? playback_ix[8:1] : input_addr),
-	.data    (ram_tog ? 8'h00 : new_cell),
-	.wren    (ram_tog ? erase_cell : latch_byte && mclk1),
-	.enable  (mclk0 | mclk1),
-	.q       (lram_a_dout)
-);
+// spram #(.addr_width(8), .data_width (5), .mem_name("LRAMA")) lineram_a
+// (
+// 	.clock   (clk_sys),
+// 	.address (ram_tog ? playback_ix[8:1] : input_addr),
+// 	.data    (ram_tog ? 8'h00 : new_cell),
+// 	.wren    (ram_tog ? erase_cell : latch_byte && mclk1),
+// 	.enable  (mclk0 | mclk1),
+// 	.q       (lram_a_dout)
+// );
 
-spram #(.addr_width(8), .data_width (5), .mem_name("LRAMB")) lineram_b
-(
-	.clock   (clk_sys),
-	.address (~ram_tog ? playback_ix[8:1] : input_addr),
-	.data    (~ram_tog ? 8'h00 : new_cell),
-	.wren    (~ram_tog ? erase_cell : latch_byte && mclk1),
-	.enable  (mclk0 | mclk1),
-	.q       (lram_b_dout)
-);
+// spram #(.addr_width(8), .data_width (5), .mem_name("LRAMB")) lineram_b
+// (
+// 	.clock   (clk_sys),
+// 	.address (~ram_tog ? playback_ix[8:1] : input_addr),
+// 	.data    (~ram_tog ? 8'h00 : new_cell),
+// 	.wren    (~ram_tog ? erase_cell : latch_byte && mclk1),
+// 	.enable  (mclk0 | mclk1),
+// 	.q       (lram_b_dout)
+// );
 
 
 logic [5:0] pb_map_index[8];
@@ -189,12 +189,12 @@ assign input_addr = hpos + offset;
 
 always_ff @(posedge clk_sys) begin
 	if (RESET) begin
-		lram_in <= 800'd0;
-		lram_out <= 800'd0;
+		// lram_in <= 800'd0;
+		// lram_out <= 800'd0;
 		offset <= 0;
 	end else if (mclk0) begin
-		if (erase_cell)
-			lram_out[lram_ix] <= 0;
+		// if (erase_cell)
+		// 	lram_out[lram_ix] <= 0;
 		if (lrc) begin
 			lram_in <= 800'd0; // All background color
 			lram_out <= lram_in;

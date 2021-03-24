@@ -18,6 +18,8 @@
     Date: 27-10-2016
     */
 
+// altera message_off 10858
+// altera message_off 10036
 
 module jt51_reg(
     input           rst,

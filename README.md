@@ -1,11 +1,13 @@
 # Atari7800 for MiSTer.
 
 ## Features
-- Runs complete retail library.
+- Runs complete Atari 7800 retail library.
 - Supports NTSC and PAL regions.
 - Supports High Score Cart saving.
-- Has support for YM and Pokey audio.
-- Partial support for XM and XBoard modules (limited expansion ram).
+- Supports Light Guns, Trakballs, and Paddles.
+- Dual Pokey audio.
+- YM2151 Audio using Jotego's JT51.
+- Support for XM and XBoard modules.
 - Supports Activision, Absolute, Souper, and Supergame mappers up to 1mb.
 - Choice of Cool, Warm, or Hot system temperature color output.
 
@@ -17,6 +19,7 @@ Some games use the [difficulty switches](https://atariage.com/forums/topic/23591
 
 ## Known Bugs
 - POKEY audio has some issues with 16 bit frequencies and certain tones.
+- Expansion ram of XM module is not fully implemented because I couldnt find anything that used it.
 
 ## Special Thanks
 - Mark Saarna for his enormous knowledge of the system.

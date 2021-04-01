@@ -1,6 +1,12 @@
-// Princess TIA
-// Copyright Jamie Dickson, 2019 - 2021
-// Based on Stella Programmer's Guide and TIA schematics, and verified with Stella Emulator
+// k7800 (c) by Jamie Blanks
+
+// k7800 is licensed under a
+// Creative Commons Attribution-NonCommercial 4.0 International License.
+
+// You should have received a copy of the license along with this
+// work. If not, see http://creativecommons.org/licenses/by-nc/4.0/.
+
+// Based on Stella Programmer's Guide, TIA Schematics, and Decapped TIA.
 
 typedef enum bit [5:0] {
 	VSYNC   = 6'h00,  // Write: vertical sync set-clear (D1)
@@ -123,28 +129,30 @@ localparam hblank_start = 0; // Blank 68 counts
 localparam hblank_end = 67; // Blank 68 counts
 
 logic [5:0] lfsr;
+logic hsync_1, hblank_1;
 logic hmove_latch;
 
-logic err, rhs, rcb, shs, lrhb;
+logic err, rhs, rcb, shs, lrhb, ehb;
 
-assign aud0 = (HP2 & (err | shb | lrhb));
-assign aud1 = (HP2 & (rhs | cnt));
+assign aud0 = (HP2 && (shb || lrhb));
+assign aud1 = (HP2 && (rhs || cnt));
 
-assign res0d = err | shb;
-
+assign res0d = err || shb;
+// RHS Delayed twice for hsync, delayed once for audclk0
+// CNT delayed once for audc0, delayed 0 for playfield.
 always_comb begin
-	{err, wsr, shb, rhs, cnt, rcb, shs, lrhb, rhb} = 0;
+	{err, wsr, rhs, ehb, cnt, shs, lrhb, rhb} = '0;
 	case (lfsr)
 			6'b000000: wsr = 1;
 			6'b111111: err = 1;    // Error
-			6'b010100: shb = 1;    // End (Set Hblank)
+			6'b010100: ehb = 1;    // End (Set Hblank)
 			6'b110111: rhs = 1;    // Reset HSync
 			6'b101100: cnt = 1;    // Center // 101001?
-			6'b001111: rcb = 1;    // Reset Color Burst
+//			6'b001111: rcb = 1;    // Reset Color Burst
 			6'b111100: shs = 1;    // Set Hsync
 			6'b011100: rhb = 1;    // Reset HBlank
 			6'b010111: lrhb = 1;   // Late Reset Hblank
-			default: {err, wsr, shb, rhs, cnt, rcb, shs, lrhb, rhb} = 0;
+			default: ;
 	endcase
 
 // 	if (rsync)111011 000100
@@ -158,39 +166,46 @@ end
 // 		cntd = 0;
 // end
 
+logic shb_1;
 always_ff @(posedge clk) if (rst) begin
-	lfsr <= 6'd0;
+	lfsr <= 0;
+	hmove_latch <= 0;
+	hsync <= 0;
+	hblank <= 0;
+	hgap <= 0;
+	shb <= 0;
+	hsync_1 <= 0;
+	hblank_1 <= 0;
+	cntd <= 0;
+	shbd <= 0;
 end else begin
 	if (hmove)
 		hmove_latch <= 1;
 
-	if (HP1) begin
-		shbd <= shb | rsync | err;
+	if (HP2) begin
+		shb <= ehb || rsync || err;
 	end
 
-	if (HP2) begin
-		//shbd2 <= shbd;
-		lfsr <= shbd ? 6'd0 : {~((lfsr[1] & ~lfsr[0]) | ~(lfsr[1] | ~lfsr[0])), lfsr[5:1]};
+	if (HP1) begin
+		lfsr <= shb ? 6'd0 : {~((lfsr[1] && ~lfsr[0]) || ~(lfsr[1] || ~lfsr[0])), lfsr[5:1]};
+		cntd <= cnt;
+		hsync <= hsync_1;
+		//hblank <= hblank_1;
 
-		if (err | shb | rsync) begin
+		if (shb) begin
 			hblank <= 1;
+			hmove_latch <= 0;
 			hgap <= 1;
-			cntd <= 0;
 			lfsr <= 6'd0;
 		end
 
 		if (rhs) begin
-			hsync <= 0;
-			hmove_latch <= 0;
+			hsync_1 <= 0;
 		end
 
-		if (cnt) begin
-			cntd <= 1;
+		if (shs) begin
+			hsync_1 <= 1;
 		end
-
-		if (shs)
-			hsync <= 1;
-
 		if (rhb) begin
 			hblank <= hmove_latch;
 			hgap <= 0;
@@ -247,14 +262,14 @@ logic [2:0] hp_cnt;
 logic rsync_latch;
 logic phi_clear;
 logic cc_tog;
+logic hp_tog;
 
-assign HP1 = hp_cnt == 0 && ce;
-assign HP2 = hp_cnt == 4 && ce;
+assign HP1 = hp_cnt == 1 && ~hp_tog && CC;
+assign HP2 = hp_cnt == 1 && hp_tog && CC;
 
-assign phi0 = phi_div == 3 && ce;
-//assign phi2_gen = phi0;
-assign phi1 = phi_div == 1 && ce;
-assign phase = phi_div > 3 || phi_div == 0;
+assign phi0 = phi_div == 1 && ce;
+assign phi1 = phi_div == 4 && ce;
+assign phase = phi_div > 2;
 assign CC = cc_tog && ce;
 
 always_ff @(posedge clk) begin : phi0_gen
@@ -262,19 +277,28 @@ always_ff @(posedge clk) begin : phi0_gen
 	if (ce) begin
 		cc_tog <= ~cc_tog;
 		phi_div <= phi_div + 1'd1;
-		hp_cnt <= hp_cnt + 1'd1;
 
 		if (phi_div == 5)
 			phi_div <= 0;
 	end
 
+	if (CC) begin
+		hp_cnt <= hp_cnt + 1'd1;
+		if (hp_cnt == 1) begin
+			hp_cnt <= 0;
+			hp_tog <= ~hp_tog;
+		end
+	end
+
+
 	if (rsync)
 		rsync_latch <= 1;
 
-	if ((rsync || rsync_latch) && phi_div == 0 && ~CC) begin
+	if ((rsync || rsync_latch) && phi_div == 0 && (ce && ~CC)) begin
 		rsync_latch <= 0;
 		rsync_d <= 1;
 		hp_cnt <= 0;
+		hp_tog <= 0;
 		phi_clear <= 1;
 	end
 
@@ -287,7 +311,9 @@ always_ff @(posedge clk) begin : phi0_gen
 	if (reset) begin
 		rsync_latch <= 0;
 		cc_tog <= 0;
+		rsync_d <= 0;
 		phi_clear <= 0;
+		phi2_gen <= 0;
 		phi_div <= 0;
 		hp_cnt <= 0;
 	end
@@ -299,6 +325,7 @@ endmodule
 module hmove_gen
 (
 	input  logic       clk,
+	input  logic       cc,
 	input  logic       reset,
 	input  logic       HP1,
 	input  logic       HP2,
@@ -309,6 +336,7 @@ module hmove_gen
 	input  logic [3:0] m0_m,
 	input  logic [3:0] m1_m,
 	input  logic [3:0] bl_m,
+	output logic       sec,
 	output logic       p0_mclk,
 	output logic       p1_mclk,
 	output logic       m0_mclk,
@@ -317,40 +345,46 @@ module hmove_gen
 );
 	logic p0ec, p1ec, m0ec, m1ec, blec;
 
-	assign p0_mclk = ~hblank | p0ec & HP1;
-	assign p1_mclk = ~hblank | p1ec & HP1;
-	assign m0_mclk = ~hblank | m0ec & HP1;
-	assign m1_mclk = ~hblank | m1ec & HP1;
-	assign bl_mclk = ~hblank | blec & HP1;
+	assign p0_mclk = (~hblank || p0ec && HP1) && cc;
+	assign p1_mclk = (~hblank || p1ec && HP1) && cc;
+	assign m0_mclk = (~hblank || m0ec && HP1) && cc;
+	assign m1_mclk = (~hblank || m1ec && HP1) && cc;
+	assign bl_mclk = (~hblank || blec && HP1) && cc;
+
+	logic [3:0] hmove_cnt;
+	logic sec_1;
+
+	wire [3:0] hmc_uns = {~hmove_cnt[3], hmove_cnt[2:0]};
 
 	always @(posedge clk) begin : hmove_block
-		logic [3:0] hmove_cnt;
-		logic sec, sec_1;
-
+		// Hmove latches when set, then progresses through 
+		// HP1 gate, HP2 gate, then HP1 gate before it goes to the
+		// memory to take action at HP2
 		if (hmove)
 			sec_1 <= 1;
-
-		if (HP1) begin
-			sec <= sec_1 | hmove;
+		else if (sec)
 			sec_1 <= 0;
-		end
 
 		if (HP2) begin
-			if (sec || |hmove_cnt)
-				hmove_cnt <= hmove_cnt + 1'd1;
-			
+			sec <= sec_1;
+		end
+
+		if (HP1) begin
 			if (sec)
 				{p0ec, p1ec, m0ec, m1ec, blec} <= 5'b11111;
 
-			if (p0_m[3:0] == {~hmove_cnt[3], hmove_cnt[2:0]})
+			if (sec || |hmove_cnt)
+				hmove_cnt <= hmove_cnt + 1'd1;
+
+			if (p0_m[3:0] == hmc_uns)
 				p0ec <= 0;
-			if (p1_m[3:0] == {~hmove_cnt[3], hmove_cnt[2:0]})
+			if (p1_m[3:0] == hmc_uns)
 				p1ec <= 0;
-			if (m0_m[3:0] == {~hmove_cnt[3], hmove_cnt[2:0]})
+			if (m0_m[3:0] == hmc_uns)
 				m0ec <= 0;
-			if (m1_m[3:0] == {~hmove_cnt[3], hmove_cnt[2:0]})
+			if (m1_m[3:0] == hmc_uns)
 				m1ec <= 0;
-			if (bl_m[3:0] == {~hmove_cnt[3], hmove_cnt[2:0]})
+			if (bl_m[3:0] == hmc_uns)
 				blec <= 0;
 		end
 	end
@@ -366,7 +400,7 @@ module playfield
 	input reset,
 	input HP1,
 	input HP2, // Horizontal clock phase 2
-	input hblank,
+	input cc,
 	input reflect, // Control playfield, 1 makes right half mirror image
 	input cnt,   // center signal, high means right half
 	input rhb,
@@ -384,15 +418,6 @@ assign index_lut = '{
 	5'd12, 5'd13, 5'd14, 5'd15, 5'd16, 5'd17, 5'd18, 5'd19  // PF2
 };
 
-//assign pf = hblank ? 1'd0 : pfc[index_lut[pf_index]];
-
-// ((cnt & ~mirror) | rhb)
-// ~(~cnt | ~mirror)
-
-// logic and1 = cnt & ~reflect;
-// logic nor1 = ~|{~cnt, ~relfect};
-// logic nor2 = |{and1, rhb};
-
 always @(posedge clk) begin : pf_block
 	logic dir;
 	// The first half of the screen should draw from left to right in a strange order:
@@ -400,29 +425,28 @@ always @(posedge clk) begin : pf_block
 	// PF0     PF1         PF2
 	// 4567 <- 76543210 <- 01234567
 
-
-	if (HP2) begin
+	if (cc)
 		pf <= pfc[index_lut[pf_index]];
 
-		if (dir & |pf_index)
+	if (HP2) begin
+		if (dir && |pf_index)
 			pf_index <= pf_index - 5'd1;
-		else if (~dir & pf_index < 19)
+		else if (~dir && pf_index < 19)
 			pf_index <= pf_index + 5'd1;
 
-		if (cnt & reflect)
-		dir <= 1;
+		if (cnt && reflect)
+			dir <= 1;
 
-		if (rhb | (cnt & ~reflect)) begin
+		if (rhb || (cnt && ~reflect)) begin
 			dir <= 0;
 			pf_index <= 0;
 		end
 	end
 
-
-
 	if (reset) begin
 		dir <= 0;
 		pf_index <= 0;
+		pf <= 0;
 	end
 end
 
@@ -459,7 +483,7 @@ logic scan_en;
 assign PP0 = player_div == 0;
 assign PP1_edge = player_div == 2;
 assign PP1 = player_div == 3;
-assign ce = motck & enable;
+assign ce = motck && enable;
 assign m_rst = fstob && scan_out == 1;
 
 
@@ -470,11 +494,11 @@ always_ff @(posedge clk) begin
 
 		scan_clk <=
 			(~(size == 3'b111) && ~(size == 3'b101)) ||
-			(PP1 && ((size == 3'b111) | (size == 3'b101))) ||
+			(PP1 && ((size == 3'b111) || (size == 3'b101))) ||
 			(PP0 && (size == 3'b101));
 
 		if (PP1_edge) begin
-			lfsr <= {~((lfsr[1] & ~lfsr[0]) | ~(lfsr[1] | ~lfsr[0])), lfsr[5:1]};
+			lfsr <= {~((lfsr[1] && ~lfsr[0]) || ~(lfsr[1] || ~lfsr[0])), lfsr[5:1]};
 			if (lfsr == 6'b111111 || lfsr == 6'b101101)
 				lfsr <= 0;
 			if  ((lfsr == 6'b101101) ||
@@ -502,7 +526,7 @@ always_ff @(posedge clk) begin
 		end
 end
 
-	if (resp | reset) begin
+	if (resp || reset) begin
 		lfsr <= 0;
 		player_div <= 0;
 	end
@@ -608,7 +632,7 @@ assign bl = 0;//(start && (size[1] | P1 | (div == 2 && size == 3))) || (start_la
 always_ff @(posedge clk) begin
 	{P0, P1} <= 0;
 
-	if (cc & enabl) begin
+	if (cc && enabl) begin
 		div <= div + 2'd1;
 		if (div == 3)
 			P0 <= 1;
@@ -617,7 +641,7 @@ always_ff @(posedge clk) begin
 	end
 
 	if (P1) begin
-		lfsr <= {~(~(lfsr[1] | lfsr[0]) | (~lfsr[0] & lfsr[1])), lfsr[5:1]};
+		lfsr <= {~(~(lfsr[1] || lfsr[0]) || (~lfsr[0] && lfsr[1])), lfsr[5:1]};
 		start_last <= start;
 		if (lfsr == 6'b111111) // Error
 			lfsr <= 0;
@@ -650,6 +674,7 @@ module priority_encoder
 	input m1,
 	input pf,
 	input bl,
+	input blank,
 	input cntd, // 0 = left half, 1 = right half
 	input pfp,
 	input score,
@@ -671,19 +696,27 @@ module priority_encoder
 // When a one is written into the score control bit, the playfield is forced
 // to take the color-lum of player 0 in the left half of the screen and player
 // 1 in the right half of the screen.
+logic right_side;
+
+always @(posedge clk) begin
+	if (cntd)
+		right_side <= 1;
+	else if (blank)
+		right_side <= 0;
+end
 
 always_comb begin
-	casex ({pfp, (pf | bl), (p1 | m1), (p0 | m0)})
+	casex ({pfp, (pf || bl), (p1 || m1), (p0 || m0)})
 		4'bX_001: col_select = 4'b0001;
 		4'bX_010: col_select = 4'b0010;
 		4'bX_011: col_select = 4'b0001;
-		4'bX_100: col_select = 4'b0100;
+		4'bX_100: col_select = score ? (right_side ? 4'b0010 : 4'b0001) : 4'b0100;
 		4'b0_101: col_select = 4'b0001;
 		4'b0_110: col_select = 4'b0010;
 		4'b0_111: col_select = 4'b0001;
-		4'b1_101: col_select = score ? (cntd ? 4'b0010 : 4'b0001) : 4'b0100;
-		4'b1_110: col_select = score ? (cntd ? 4'b0010 : 4'b0001) : 4'b0100;
-		4'b1_111: col_select = score ? (cntd ? 4'b0010 : 4'b0001) : 4'b0100;
+		4'b1_101: col_select = score ? (right_side ? 4'b0010 : 4'b0001) : 4'b0100;
+		4'b1_110: col_select = score ? (right_side ? 4'b0010 : 4'b0001) : 4'b0100;
+		4'b1_111: col_select = score ? (right_side ? 4'b0010 : 4'b0001) : 4'b0100;
 		default: col_select = 4'b1000;
 	endcase
 end
@@ -731,8 +764,8 @@ logic rnor1, rnor2, rnor3;
 logic rand1;
 
 // Frequency divider area logic
-assign T1 = aud0 & freq_clk;
-assign T2 = aud1 & freq_clk;
+assign T1 = aud0 && freq_clk;
+assign T2 = aud1 && freq_clk;
 
 // Noise area logic
 assign nor1 = ~|{~audc[1:0], noise0_latch_n};
@@ -744,8 +777,8 @@ assign nor6 = ~|{nor5, and1};
 assign nor7 = ~|{nor6, noise[0]};
 assign nor8 = ~|{nor_a, nor7, and2, noise_wnor_2};
 
-assign and1 = nor4 & pulse[0];
-assign and2 = noise[0] & nor6;
+assign and1 = nor4 && pulse[0];
+assign and2 = noise[0] && nor6;
 
 assign noise_wnor_1 = ~|{noise[4:2], ~noise[1], audc[0], ~audc[1]};
 assign noise_wnor_2 = ~|{noise, nor3};
@@ -755,7 +788,7 @@ assign rnor1 = ~|{pulse_wnor_2, pulse[1]};
 assign rnor2 = ~|{pulse[1], pulse[0]};
 assign rnor3 = ~|{pulse_wnor_1, rnor2, rand1};
 
-assign rand1 = pulse[1] & pulse[0];
+assign rand1 = pulse[1] && pulse[0];
 
 assign nor_a = ~|audc;
 assign nor_b = ~|{audc[3:2], rnor3};
@@ -843,7 +876,8 @@ module TIA2
 	output       hsync,
 	output       phi2_gen,
 	input        phi1_in,
-	input [7:0]  open_bus
+	input [7:0]  open_bus,
+	input        decomb
 );
 
 logic [7:0] wreg[64]; // Write registers. Only 44 are used.
@@ -861,13 +895,14 @@ logic aclk0, aclk1, cntd, cnt;
 logic HP1, HP2; // Horizontal phase clocks
 logic cc; // Color Clock (original oscillator speed)
 logic rhb, shb, wsr, shbd; // Hblank triggers
+logic sec;
 
-assign cs = ~cs0_n & ~cs2_n;
+assign cs = ~cs0_n && ~cs2_n;
 assign video_ce = cc;
 
 //assign d_out[5:0] = 6'h00;
-assign BLK_n = ~(hblank | vblank);
-assign sync = ~(hsync | vsync);
+assign BLK_n = ~(hblank || vblank);
+assign sync = ~(hsync || vsync);
 assign vsync = wreg[VSYNC][1];
 assign vblank = wreg[VBLANK][1];
 
@@ -889,10 +924,17 @@ assign rpm = '{
 
 assign d_out[5:0] = open_bus[5:0];
 
+always_ff @(posedge clk) begin
+	if (phi1_in)
+		phase <= 0;
+	if (phi2)
+		phase <= 1;
+end
+
 always @(posedge clk) begin
 	i_out <= {4{~wreg[VBLANK][7]}};
-	if (phi2) begin
-		if (cs & RW_n) begin
+	if (phase) begin
+		if (cs && RW_n) begin
 			if (addr[3:0] == INPT4 && ~wreg[VBLANK][6]) begin
 				d_out[7:6] <= {i4, 1'b0} | (open_bus[7:6] & ~rpm[addr[3:0]]);
 			end else if (addr[3:0] == INPT5 && ~wreg[VBLANK][6]) begin
@@ -903,15 +945,21 @@ always @(posedge clk) begin
 				d_out[7:6] <= open_bus[7:6];
 		end
 	end
+	if (rst)
+		d_out[7:6] <= 0;
 
-	if (phi2 && cs && ~RW_n && addr <= 6'h2C) begin
-		wreg[addr] <= d_in;
-		if (addr == GRP0)
-			wreg[GRP0O] <= wreg[GRP0];
-		if (addr == GRP1)
-			wreg[GRP1O] <= wreg[GRP1];
-		if (addr == ENABL)
-			wreg[ENBLO] <= wreg[ENABL];
+	if (cs && ~RW_n && addr <= 6'h2C) begin
+		if (phase)
+			wreg[addr] <= d_in;
+
+		if (phi2) begin
+			if (addr == GRP0)
+				wreg[GRP0O] <= wreg[GRP0];
+			if (addr == GRP1)
+				wreg[GRP1O] <= wreg[GRP1];
+			if (addr == ENABL)
+				wreg[ENBLO] <= wreg[ENABL];
+		end
 
 	end
 
@@ -929,11 +977,8 @@ end
 
 // "Strobe" registers have an immediate effect
 always @(posedge clk) begin
-	if (HP1) begin
-		{wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr} <= '0;
-	end
-
-	if (~RW_n && phi2 && cs) begin
+	{wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr} <= '0;
+	if (~RW_n && phase && cs) begin
 		case(addr)
 			WSYNC: wsync <= 1;
 			RSYNC: rsync <= 1;
@@ -951,30 +996,12 @@ always @(posedge clk) begin
 end
 
 
-// Unaccount for:
-// VDELP0
-
 // Submodules
 
 logic [7:0] uv_gen;
 logic vs_gen, vb_gen, hs_gen, hb_gen;
 logic p0ec, p1ec, m0ec, m1ec, blec;
 logic res0d;
-
-// frame_gen frame
-// (
-// 	.clk       (clk),
-// 	.rst       (rst),
-// 	.cc        (cc),
-// 	.enable    (1),
-// 	.hbs       (shb),
-// 	.hbr       (rhb),
-// 	.vblank_in (wreg[VBLANK][1]),
-// 	.vsync_in  (wreg[VSYNC][1]),
-// 	.uv_in     ({col, lum}),
-// 	.uv_out    (uv_gen)
-
-// );
 
 clockgen clockgen
 (
@@ -985,22 +1012,24 @@ clockgen clockgen
 	.phi0     (phi0),
 	.phi1     (phi1),
 	.phi2_gen (phi2_gen),
-	.rsync    (rsync | rst),
+	.rsync    (rsync),
 	.HP1      (HP1),
 	.HP2      (HP2),
-	.phase    (phase)
+	.reset    (rst),
+	.phase    ()
 );
 
 horiz_gen h_gen
 (
 	.clk    (clk),
+	.rst    (rst),
 	.HP1    (HP1),
 	.HP2    (HP2),
-	.rsync  (rsync | rst),
-	.hmove  (hmove),
+	.rsync  (rsync),
+	.hmove  (sec),
 	.hsync  (hsync),
+	.res0d  (res0d),
 	.hgap   (hgap),
-	.res0d (res0d),
 	.hblank (hblank),
 	.cntd   (cntd),
 	.cnt    (cnt),
@@ -1018,28 +1047,29 @@ playfield playfield
 	.reset(rst),
 	.HP1(HP1),
 	.HP2(HP2),
+	.cc (cc),
 	.rhb(rhb),
-	.hblank(hblank),
 	.reflect(wreg[CTRLPF][0]),
 	.cnt(cnt),
 	.pfc({wreg[PF2], wreg[PF1], wreg[PF0][7:4]}),
 	.pf(pf)
 );
 
-
 hmove_gen hmv
 (
 	.clk     (clk),
+	.cc      (cc),
 	.reset   (rst),
+	.sec     (sec),
 	.HP1     (HP1),
 	.HP2     (HP2),
 	.hmove   (hmove),
 	.hblank  (hblank),
-	.p0_m    (wreg[HMP0][7:4]),
-	.p1_m    (wreg[HMP1][7:4]),
-	.m0_m    (wreg[HMM0][7:4]),
-	.m1_m    (wreg[HMM1][7:4]),
-	.bl_m    (wreg[HMBL][7:4]),
+	.p0_m    (wreg[HMP0][7:4] & (hmclr ? 4'b0000 : 4'b111)),
+	.p1_m    (wreg[HMP1][7:4] & (hmclr ? 4'b0000 : 4'b111)),
+	.m0_m    (wreg[HMM0][7:4] & (hmclr ? 4'b0000 : 4'b111)),
+	.m1_m    (wreg[HMM1][7:4] & (hmclr ? 4'b0000 : 4'b111)),
+	.bl_m    (wreg[HMBL][7:4] & (hmclr ? 4'b0000 : 4'b111)),
 	.p0_mclk (p0ec),
 	.p1_mclk (p1ec),
 	.m0_mclk (m0ec),
@@ -1050,8 +1080,42 @@ hmove_gen hmv
 // -- 		port map(clk, p0_rst, p0_count, p0_nusiz, p0_reflect,
 // -- 					p0_grpnew, p0_grpold, p0_vdel, p0_mrst, p0_pix);
 logic msrst0, msrst1;
+
+// player_o player0
+// (
+// 	.clk     (clk),
+// 	.motck   (cc),
+// 	.enable  (p0ec),
+// 	.resp    (resp0),
+// 	.reset   (rst),
+// 	.delay   (wreg[VDELP0]),
+// 	.grp     (wreg[GRP0]),
+// 	.grpo    (wreg[GRP0O]),
+// 	.refp    (wreg[REFP0][3]),
+// 	.size    (wreg[NUSIZ0][2:0]),
+// 	.m_rst   (msrst0),
+// 	.p       (p0)
+// );
+
+// player_o player1
+// (
+// 	.clk     (clk),
+// 	.motck   (cc),
+// 	.enable  (p1ec),
+// 	.resp    (resp1),
+// 	.reset   (rst),
+// 	.delay   (wreg[VDELP1]),
+// 	.grp     (wreg[GRP1]),
+// 	.grpo    (wreg[GRP1O]),
+// 	.refp    (wreg[REFP1][3]),
+// 	.size    (wreg[NUSIZ1][2:0]),
+// 	.m_rst   (msrst1),
+// 	.p       (p1)
+// );
+
+
 player play1 (
-	.clk     (cc),
+	.clk     (clk),
 	.prst    (resp0),
 	.count   (p0ec),
 	.nusiz   (wreg[NUSIZ0][2:0]),
@@ -1064,7 +1128,7 @@ player play1 (
 );
 
 player play2 (
-	.clk     (cc),
+	.clk     (clk),
 	.prst    (resp1),
 	.count   (p1ec),
 	.nusiz   (wreg[NUSIZ1][2:0]),
@@ -1077,7 +1141,7 @@ player play2 (
 );
 
 missile mis1 (
-	.clk    (cc),
+	.clk    (clk),
 	.prst   (resm0 || (wreg[RESMP0][1] && msrst0)),
 	.count  (m0ec),
 	.enable (wreg[ENAM0][1]),
@@ -1087,49 +1151,17 @@ missile mis1 (
 );
 
 missile mis2 (
-	.clk    (cc),
-	.prst   (resm1|| (wreg[RESMP1][1] && msrst1)),
+	.clk    (clk),
+	.prst   (resm1 || (wreg[RESMP1][1] && msrst1)),
 	.count  (m1ec),
 	.enable (wreg[ENAM1][1]),
 	.nusiz  (wreg[NUSIZ1][2:0]),
 	.size   (wreg[NUSIZ1][5:4]),
 	.pix    (m1)
 );
-// tia_missile_obj missile0
-// (
-// 	.clk           (clk),
-// 	.mis_mot       (m0ec),
-// 	.adv_obj       (~hblank),
-// 	.pix_clk       (cc),
-// 	.reset_sys     (rst),
-// 	.mis_num       (wreg[NUSIZ0][2:0]),
-// 	.mis_siz       (wreg[NUSIZ0][5:4]),
-// 	.mis_ena       (wreg[ENAM0][1]),
-// 	.m2p_ena       (m2p_ena),
-// 	.resmis        (resm0),
-// 	.m2p_reset     (m2pr0),
-// 	.g_mis         (m0)
-// );
-
-// tia_missile_obj missile1
-// (
-// 	.clk           (clk),
-// 	.mis_mot       (m1ec),
-// 	.adv_obj       (~hblank),
-// 	.pix_clk       (cc),
-// 	.reset_sys     (rst),
-// 	.mis_num       (wreg[NUSIZ1][2:0]),
-// 	.mis_siz       (wreg[NUSIZ1][5:4]),
-// 	.mis_ena       (wreg[ENAM1][1]),
-// 	.m2p_ena       (m2p_ena2),
-// 	.resmis        (resm1),
-// 	.m2p_reset     (m2pr1),
-// 	.g_mis         (m1)
-// );
-
 
 ball bal (
-	.clk   (cc),
+	.clk   (clk),
 	.prst  (resbl),
 	.count (blec),
 	.ennew (wreg[ENABL][1]),
@@ -1138,72 +1170,6 @@ ball bal (
 	.size  (wreg[CTRLPF][5:4]),
 	.pix   (bl)
 );
-
-// player_o player0
-// (
-// 	.clk(clk),
-// 	.motck(cc),
-// 	.enable(p0ec),
-// 	.resp(resp0),
-// 	.reset(rst),
-// 	.delay(wreg[VDELP0]),
-// 	.grp(wreg[GRP0]),
-// 	.grpo(wreg[GRP0O]),
-// 	.refp(wreg[REFP0][3]),
-// 	.size(wreg[NUSIZ0][2:0]),
-// 	.p(p0)
-// );
-
-// player_o player1
-// (
-// 	.clk(clk),
-// 	.motck(cc),
-// 	.enable(p1ec),
-// 	.resp(resp1),
-// 	.reset(rst),
-// 	.delay(wreg[VDELP1]),
-// 	.grp(wreg[GRP1]),
-// 	.grpo(wreg[GRP1O]),
-// 	.refp(wreg[REFP1][3]),
-// 	.size(wreg[NUSIZ1][2:0]),
-// 	.p(p1)
-// );
-
-logic m2pr0, m2pr1;
-
-
-// missile_o missile0
-// (
-// 	.resm(resm0),
-// 	.resmp(wreg[RESMP0][1]),
-// 	.hmove(hmove),
-// 	.enam(wreg[ENAM0][1]),
-// 	.size(wreg[NUSIZ0][5:4]),
-// 	.m(m0)
-// );
-
-logic m2p_ena, m2p_ena2;
-
-
-// missile_o missile1
-// (
-// 	.resm(resm1),
-// 	.resmp(wreg[RESMP1][1]),
-// 	.hmove(hmove),
-// 	.enam(wreg[ENAM1][1]),
-// 	.size(wreg[NUSIZ1][5:4]),
-// 	.m(m1)
-// );
-
-// ball_o ball
-// (
-// 	.clk(clk),
-// 	.resbl(resbl),
-// 	.delay(wreg[VDELBL]),
-// 	.enabl(wreg[ENABL][1]),
-// 	.size(wreg[CTRLPF][5:4]),
-// 	.bl(bl)
-// );
 
 priority_encoder prior
 (
@@ -1214,6 +1180,7 @@ priority_encoder prior
 	.bl     (bl),
 	.pf     (pf),
 	.cntd   (cntd),
+	.blank  (hblank || vblank),
 	.pfp    (wreg[CTRLPF][2]),
 	.score  (wreg[CTRLPF][1]),
 	.col_select (color_select)
@@ -1246,8 +1213,8 @@ audio_channel audio1
 
 // Select the correct output register
 always_comb begin
-	if (hblank | vblank)
-		{col, lum} = 7'd0; // My own innovation for modern displays, not part of the chip
+	if (hblank || vblank)
+		{col, lum} = decomb ? wreg[COLUBK][7:1] : 7'd0; // My own innovation for modern displays, not part of the chip
 	else begin
 		case (color_select)
 			4'b0001: {col, lum} = wreg[COLUP0][7:1];
@@ -1261,10 +1228,10 @@ end
 
 // WSYNC register controls the RDY signal to the CPU. It is cleared at the start of hblank.
 always_ff @(posedge clk) begin
-	if (wsync)
+	if (wsync && cc)
 		rdy <= 0;
 
-	if (shbd & HP2)
+	if (shb)
 		rdy <= 1;
 
 	if (rst)
@@ -1272,47 +1239,35 @@ always_ff @(posedge clk) begin
 end
 
 // Calculate the collisions
-logic hsync_clock;
 
 always_ff @(posedge clk) begin : read_reg_block
-	logic old_hsync;
 	logic [8:0] x;
-	logic [7:0] icount;
 
-	hsync_clock <= 0;
-	old_hsync <= hsync;
-	if (~old_hsync & hsync)
-		hsync_clock <= 1;
-
-	if (rst) begin
-		rreg <= '{16{8'h00}};
-
-	end else if (HP2) begin // FIXME this should always be implicitly opposite phi2 for reads.
+	if (cc) begin // FIXME: this should always be implicitly opposite phi2 for reads.
 		if (cxclr) begin
 			{rreg[CXM0P][7:6], rreg[CXM1P][7:6], rreg[CXP0FB][7:6],
 				rreg[CXP1FB][7:6], rreg[CXM0FB][7:6], rreg[CXM1FB][7:6],
 				rreg[CXBLPF][7:6], rreg[CXPPMM][7:6]} <= '0;
 		end else begin
-			rreg[CXM0P][7:6]  <= (rreg[CXM0P][7:6] | {(m0 & p1), (m0 & m0)});
-			rreg[CXM1P][7:6]  <= (rreg[CXM1P][7:6] | {(m1 & p0), (m1 & p1)});
-			rreg[CXP0FB][7:6] <= (rreg[CXM1P][7:6] | {(p0 & pf), (p0 & bl)});
-			rreg[CXP1FB][7:6] <= (rreg[CXP1FB][7:6]| {(p1 & pf), (p1 & bl)});
-			rreg[CXM0FB][7:6] <= (rreg[CXM0FB][7:6]| {(m0 & pf), (m0 & bl)});
-			rreg[CXM1FB][7:6] <= (rreg[CXM1FB][7:6]| {(m1 & pf), (m1 & bl)});
-			rreg[CXBLPF][7:6] <= (rreg[CXBLPF][7:6]| {(bl & pf), 1'b0});
-			rreg[CXPPMM][7:6] <= (rreg[CXPPMM][7:6]| {(p0 & p1), (m0 & m1)});
+			rreg[CXM0P][7:6]  <= (rreg[CXM0P][7:6]  | {(m0 && p1), (m0 && p0)});
+			rreg[CXM1P][7:6]  <= (rreg[CXM1P][7:6]  | {(m1 && p0), (m1 && p1)});
+			rreg[CXP0FB][7:6] <= (rreg[CXM1P][7:6]  | {(p0 && pf), (p0 && bl)});
+			rreg[CXP1FB][7:6] <= (rreg[CXP1FB][7:6] | {(p1 && pf), (p1 && bl)});
+			rreg[CXM0FB][7:6] <= (rreg[CXM0FB][7:6] | {(m0 && pf), (m0 && bl)});
+			rreg[CXM1FB][7:6] <= (rreg[CXM1FB][7:6] | {(m1 && pf), (m1 && bl)});
+			rreg[CXBLPF][7:6] <= (rreg[CXBLPF][7:6] | {(bl && pf), 1'b0});
+			rreg[CXPPMM][7:6] <= (rreg[CXPPMM][7:6] | {(p0 && p1), (m0 && m1)});
 		end
 
-		// Analog input requires simulating the capacitor recharge of the paddle
-		// circuit. This generally takes 1 hsync per (196 - (value / 2)) of the given input port.
 		for (x = 0; x < 4; x = x + 1'd1) begin
-			rreg[{2'b10, x[1:0]}][7] <= /*wreg[VBLANK][7] ? 1'b0 : */ i[x[1:0]];
-			//rreg[{2'b10, x[1:0]}][7] <= ((8'd196 - i[x[1:0]][7:1]) <= icount);
+			rreg[{2'b10, x[1:0]}][7] <= wreg[VBLANK][7] ? 1'b0 : i[x[1:0]];
 		end
 	end
 
+	// TODO: Is this the case?
 	// if (phi2 && ~RW_n && cs && addr == VBLANK && d_in[6])
 	// 	{rreg[INPT4][7], rreg[INPT5][7]} <= '1;
+
 	if (~wreg[VBLANK][6]) begin
 		{rreg[INPT4][7], rreg[INPT5][7]} <= '1;
 	end else begin
@@ -1322,35 +1277,15 @@ always_ff @(posedge clk) begin : read_reg_block
 			rreg[INPT5][7] <= 0;
 	end
 
-	if (phi2 & cs & ~RW_n) begin
+	if (phase && cs && ~RW_n) begin
 		if (addr[3:0] == VBLANK && d_in[6]) begin
 			{rreg[INPT4][7], rreg[INPT5][7]} <= '1;
 		end
 	end
-	if (wreg[VBLANK][7]) begin
-		icount <= 1;
-	end else if (hsync_clock && icount < 196) begin
-		icount <= icount + 1'd1;
-	end
+
+	if (rst)
+		rreg <= '{16{8'h00}};
 end
-
-// Audio output is non-linear, and this table represents the proper compressed values of
-// audv0 + audv1.
-// Generated based on the info here: https://atariage.com/forums/topic/271920-tia-sound-abnormalities/
-
-// logic [15:0] audio_lut[32];
-// assign audio_lut = '{
-// 	16'h0000, 16'h0842, 16'h0FFF, 16'h1745, 16'h1E1D, 16'h2492, 16'h2AAA, 16'h306E,
-// 	16'h35E4, 16'h3B13, 16'h3FFF, 16'h44AE, 16'h4924, 16'h4D64, 16'h5173, 16'h5554,
-// 	16'h590A, 16'h5C97, 16'h5FFF, 16'h6343, 16'h6665, 16'h6968, 16'h6C4D, 16'h6F17,
-// 	16'h71C6, 16'h745C, 16'h76DA, 16'h7942, 16'h7B95, 16'h7DD3, 16'h7FFF, 16'hFFFF
-// };
-
-// logic [15:0] audio_lut_single[16];
-// assign audio_lut_single = '{
-// 	16'h0000, 16'h0C63, 16'h17FF, 16'h22E8, 16'h2D2C, 16'h36DB, 16'h3FFF, 16'h48A5,
-// 	16'h50D6, 16'h589C, 16'h5FFF, 16'h6705, 16'h6DB6, 16'h7416, 16'h7A2D, 16'h7FFF
-// };
 
 endmodule
 

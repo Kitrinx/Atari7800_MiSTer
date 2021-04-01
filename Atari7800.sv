@@ -1,20 +1,11 @@
-//============================================================================
-//  Atari 7800 for MiSTer
-//  Copyright (C) 2021 Kitrinx
-//  This program is free software; you can redistribute it and/or modify it
-//  under the terms of the GNU General Public License as published by the Free
-//  Software Foundation; either version 2 of the License, or (at your option)
-//  any later version.
-//
-//  This program is distributed in the hope that it will be useful, but WITHOUT
-//  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-//  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
-//  more details.
-//
-//  You should have received a copy of the GNU General Public License along
-//  with this program; if not, write to the Free Software Foundation, Inc.,
-//  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-//============================================================================
+// k7800 (c) by Jamie Blanks
+
+// k7800 is licensed under a
+// Creative Commons Attribution-NonCommercial 4.0 International License.
+
+// You should have received a copy of the license along with this
+// work. If not, see http://creativecommons.org/licenses/by-nc/4.0/.
+
 module emu
 (
 	//Master input clock
@@ -217,7 +208,7 @@ always @(posedge clk_vid)
 
 
 wire cart_download = ioctl_download & (ioctl_index[5:0] == 6'd1);
-wire bios_download = ioctl_download & (ioctl_index[5:0] == 6'd0) && (ioctl_index[7:6] == 0);
+wire bios_download = ioctl_download & ((ioctl_index[5:0] == 6'd0) && (ioctl_index[7:6] == 0)) || (ioctl_index[5:0] == 2);
 
 reg old_cart_download;
 
@@ -226,12 +217,13 @@ reg old_cart_download;
 // 0         1         2         3          4         5         6
 // 01234567890123456789012345678901 23456789012345678901234567890123
 // 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
-// XXXXXXX XXXXXXXXXXXXX XXXXXXXXXX XXX XXXXXXXXXX
+// XXXXXXXXXXXXXXXXXXXXX XXXXXXXXXX XXX XXXXXXXXXXX
 
 `include "build_id.v"
 parameter CONF_STR = {
 	"ATARI7800;;",
 	"FS1,A78A26;",
+	"FC2,ROMBIN,Load BIOS;",
 	"-;",
 	"OFG,Region,Auto,NTSC,PAL;",
 	"OC,Difficulty Right,Right,Left;",
@@ -250,7 +242,7 @@ parameter CONF_STR = {
 	"P1OT,Show Overscan,No,Yes;",
 	"P1OE,Show Border,Yes,No;",
 	"P1OK,Composite Blending,No,Yes;",
-	"P1OUV,Color Temperature,Warm,Cool,Hot;",
+	"P1OUV,Temperature Colors,Warm,Cool,Hot;",
 	"P2,Peripherals;",
 	"P2OIJ,High Score Cart,Auto,On,Off;",
 	"P2O7,Swap Joysticks,No,Yes;",
@@ -259,21 +251,25 @@ parameter CONF_STR = {
 	"P2oAD,Port2 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,SNAC;",
 	"h1P2O5,SNAC Analog,Yes,No;",
 	"h1P2O6,Sega Phaser Mode,No,Yes;",
+	"P2oE,Quadtari,Off,On;",
 	"P2-;",
 	"P2o01,Gun Control,Joy1,Joy2,Mouse;",
 	"P2o2,Gun Fire,Joy,Mouse;",
 	"P2o45,Cross,Small,Medium,Big,None;",
-
-	// TODO: snac mode phaser
-	// TODO: paddle arrangement
 	"P3,Advanced;",
 	"P3OH,Bypass Bios,Yes,No;",
 	"P3O1,Clear Memory,Zero,Random;",
+	"P3O7,Pokey IRQ Enabled,No,Yes;",
 	"-;",
 	"R0,Reset;",
 	"J,Fire1,Fire2,Pause,Select,Start,Paddle;",
 	"jn,A|P,B,R,Select,Start,L;",
 	"jp,B|P,Y,R,Select,Start,L;",
+	"I,",
+	"Paddle 1A Assigned,",
+	"Paddle 1B Assigned,",
+	"Paddle 2A Assigned,",
+	"Paddle 2B Assigned;",
 	"V,v",`BUILD_DATE
 };
 
@@ -309,6 +305,8 @@ wire [24:0] ps2_mouse;
 logic [10:0] ps2_key;
 logic [15:0] ps2_mouse_ext;
 logic is_snac0, is_snac1;
+logic info_req;
+logic [1:0] last_paddle;
 
 hps_io #(.STRLEN(($size(CONF_STR)>>3))) hps_io
 (
@@ -332,6 +330,9 @@ hps_io #(.STRLEN(($size(CONF_STR)>>3))) hps_io
 	.paddle_1(pd_1),
 	.paddle_2(pd_2),
 	.paddle_3(pd_3),
+
+	.info_req(info_req),
+	.info({1'b0,last_paddle} + 3'd1),
 
 	.ps2_mouse(ps2_mouse),
 	.ps2_mouse_ext(ps2_mouse_ext),
@@ -429,6 +430,7 @@ Atari7800 main
 	.pal_temp     (status[31:30]),
 	.tia_mode     (tia_mode),
 	.bypass_bios  (~status[17]),
+	.pokey_irq    (status[7]),
 	.hsc_en       (~|status[19:18] && (|cart_save || cart_xm[0]) ? 1'b1 : status[18]),
 	.hsc_ram_dout (hsc_ram_dout),
 	.hsc_ram_cs   (hsc_ram_cs),
@@ -527,8 +529,14 @@ always_ff @(posedge clk_sys) begin
 				'd58: cart_save <= ioctl_dout;   // 0=none, 1=high score cart, 2=savekey
 				'd63: cart_xm <= ioctl_dout; // 1 = Has XM
 			endcase
+			if (!cart_is_7800) begin
+				joy0_type <= 8'd1;
+				joy1_type <= 8'd1;
+			end
 		end else begin
-			cart_header <= 0;
+			joy0_type <= 8'd1;
+			joy1_type <= 8'd1;
+			cart_header <= '0;
 			cart_flags <= 0;
 			cart_region <= 0;
 			cart_save <= 0;
@@ -541,7 +549,7 @@ logic [24:0] cart_write_addr, fixed_addr;
 assign cart_write_addr = (ioctl_addr >= 8'd128) && cart_is_7800 ? (ioctl_addr[24:0] - 8'd128) : ioctl_addr[24:0];
 
 spram #(
-	.addr_width(15),
+	.addr_width(14),
 	.mem_name("Cart"),
 	.mem_init_file("mem0.mif")
 ) cart
@@ -554,7 +562,6 @@ spram #(
 );
 
 
-// FIXME: Make bios loadable, expand to optional size for pal and prototype bioses
 spram #(.addr_width(15), .mem_name("BIOS")) bios
 (
 	.address (bios_download ? ioctl_addr : (bios_addr[14:0] & bios_mask)),
@@ -818,8 +825,8 @@ wire joya_b2 = ~PBout[2] && ~tia_en && joy0_type != 5;
 wire joyb_b2 = ~PBout[4] && ~tia_en && joy1_type != 5;
 
 logic [15:0] joya, joyb;
-assign joya = status[7] ? joy1 : joy0;
-assign joyb = status[7] ? joy0 : joy1;
+assign joya = (status[46] && ~iout[0]) ? joy2 : (status[7] ? joy1 : joy0);
+assign joyb = (status[46] && ~iout[0]) ? joy3 : (status[7] ? joy0 : joy1);
 
 //    Col0  Col1  Col2
 logic key3, key2, key1; // Row 0

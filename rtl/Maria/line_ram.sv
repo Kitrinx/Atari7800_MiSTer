@@ -1,16 +1,23 @@
+// k7800 (c) by Jamie Blanks
+
+// k7800 is licensed under a
+// Creative Commons Attribution-NonCommercial 4.0 International License.
+
+// You should have received a copy of the license along with this
+// work. If not, see http://creativecommons.org/licenses/by-nc/4.0/.
+
 module line_ram(
 	input  logic               clk_sys, 
 	input  logic               RESET,
 	output logic [7:0]         PLAYBACK,
 	// Databus inputs
-	input  logic [7:0]         hpos,
 	input  logic [2:0]         PALETTE,
-	input  logic [7:0]         PIXELS,
+	input  logic [7:0]         d_in,
 	input  logic               WM,
 	input  logic               border,
 	// Write enable for databus inputs
 	input  logic               latch_byte,
-	input  logic               clear_hpos,
+	input  logic               latch_hpos,
 	// Memory mapped registers
 	input  logic [24:0][7:0]   COLOR_MAP,
 	input  logic [1:0]         RM,
@@ -20,50 +27,21 @@ module line_ram(
 	input  logic               lrc,
 	// VGA Control signal
 	input  logic [8:0]         LRAM_OUT_COL,
-	input  logic               DMA_EN,
-	input  logic mclk0,
-	input  logic mclk1
+	input  logic               mclk0,
+	input  logic               mclk1
 );
 
-logic [159:0][4:0]          lram_in, lram_out;
+// The behavior of these make them work poorly in bram.
+// The real system can flash-clear them and also writes
+// to multiple cells at a time.
+logic [159:0][4:0] lram_in, lram_out;
 
-logic [7:0]                 input_addr;
-
-logic [2:0]               playback_palette;
-logic [1:0]               playback_color;
-logic [4:0]               playback_cell;
-logic [8:0]               playback_ix;
-logic [7:0]               lram_ix;
-logic [7:0]               offset;
-logic [4:0]               new_cell;
-logic [4:0]               lram_a_dout;
-logic [4:0]               lram_b_dout;
-logic                     ram_tog;
-logic [4:0]               lram_bus;
-
-//wire erase_cell = playback_ix[0] && mclk0;
-// assign lram_bus = ram_tog ? lram_a_dout : lram_b_dout;
-
-// spram #(.addr_width(8), .data_width (5), .mem_name("LRAMA")) lineram_a
-// (
-// 	.clock   (clk_sys),
-// 	.address (ram_tog ? playback_ix[8:1] : input_addr),
-// 	.data    (ram_tog ? 8'h00 : new_cell),
-// 	.wren    (ram_tog ? erase_cell : latch_byte && mclk1),
-// 	.enable  (mclk0 | mclk1),
-// 	.q       (lram_a_dout)
-// );
-
-// spram #(.addr_width(8), .data_width (5), .mem_name("LRAMB")) lineram_b
-// (
-// 	.clock   (clk_sys),
-// 	.address (~ram_tog ? playback_ix[8:1] : input_addr),
-// 	.data    (~ram_tog ? 8'h00 : new_cell),
-// 	.wren    (~ram_tog ? erase_cell : latch_byte && mclk1),
-// 	.enable  (mclk0 | mclk1),
-// 	.q       (lram_b_dout)
-// );
-
+logic [2:0] playback_palette;
+logic [1:0] playback_color;
+logic [4:0] playback_cell;
+logic [8:0] playback_ix;
+logic [7:0] lram_ix;
+logic [7:0] hpos;
 
 logic [5:0] pb_map_index[8];
 assign pb_map_index = '{5'd0, 5'd3, 5'd6, 5'd9, 5'd12, 5'd15, 5'd18, 5'd21};
@@ -76,7 +54,7 @@ always @(posedge clk_sys) begin
 			playback_ix <= 0;
 	end
 	if (mclk0) begin
-		if (playback_color == 2'b0 || ~DMA_EN || border) begin
+		if (playback_color == 2'b0 || border) begin
 			PLAYBACK <= (border & ~BORDER_CONTROL) ? 8'd0 : COLOR_MAP[0];
 		end else begin
 			PLAYBACK <= COLOR_MAP[pb_map_index[playback_palette] + playback_color];
@@ -84,7 +62,6 @@ always @(posedge clk_sys) begin
 	end
 
 end
-
 
 always_comb begin
 	lram_ix = playback_ix[8:1]; // 2 pixels per lram cell
@@ -185,26 +162,22 @@ always_comb begin
 	endcase
 end
 
-assign input_addr = hpos + offset;
-
 always_ff @(posedge clk_sys) begin
 	if (RESET) begin
-		// lram_in <= 800'd0;
-		// lram_out <= 800'd0;
-		offset <= 0;
+		hpos <= 0;
 	end else if (mclk0) begin
-		// if (erase_cell)
-		// 	lram_out[lram_ix] <= 0;
+
 		if (lrc) begin
 			lram_in <= 800'd0; // All background color
 			lram_out <= lram_in;
 		end
 
-		if (clear_hpos)
-			offset <= 0;
+		if (latch_hpos) begin
+			hpos <= d_in;
+		end
 
 		if (latch_byte) begin
-			// Load PIXELS byte into lram_in
+			// Load d_in byte into lram_in
 			case (WM)
 			1'b0: begin
 				// "When wm = 0, each byte specifies four pixel cells
@@ -235,15 +208,15 @@ always_ff @(posedge clk_sys) begin
 				//      [P2  0  0 D0 P0]
 				// These can all be written into the cells using
 				// the same format and read out differently.
-				offset <= offset + 3'd4;
-				if (|PIXELS[7:6] || KANGAROO_MODE)
-					lram_in[input_addr+8'd0] <= {PALETTE, PIXELS[7:6]};
-				if (|PIXELS[5:4] || KANGAROO_MODE)
-					lram_in[input_addr+8'd1] <= {PALETTE, PIXELS[5:4]};
-				if (|PIXELS[3:2] || KANGAROO_MODE)
-					lram_in[input_addr+8'd2] <= {PALETTE, PIXELS[3:2]};
-				if (|PIXELS[1:0] || KANGAROO_MODE)
-					lram_in[input_addr+8'd3] <= {PALETTE, PIXELS[1:0]};
+				hpos <= hpos + 3'd4;
+				if (|d_in[7:6] || KANGAROO_MODE)
+					lram_in[hpos + 8'd0] <= {PALETTE, d_in[7:6]};
+				if (|d_in[5:4] || KANGAROO_MODE)
+					lram_in[hpos + 8'd1] <= {PALETTE, d_in[5:4]};
+				if (|d_in[3:2] || KANGAROO_MODE)
+					lram_in[hpos + 8'd2] <= {PALETTE, d_in[3:2]};
+				if (|d_in[1:0] || KANGAROO_MODE)
+					lram_in[hpos + 8'd3] <= {PALETTE, d_in[1:0]};
 			end
 			1'b1: begin
 				// "When wm = 1, each byte specifies two cells within the lineram."
@@ -265,11 +238,11 @@ always_ff @(posedge clk_sys) begin
 				// the same format and read out differently. Note:
 				// transparency may not be correct in 320B mode here
 				// since the color bits are different than 160B and 320C.
-				offset <= offset + 2'd2;
-				if (|PIXELS[7:6] || KANGAROO_MODE)
-					lram_in[input_addr+8'd0] <= {PALETTE[2], PIXELS[3:2], PIXELS[7:6]};
-				if (|PIXELS[5:4] || KANGAROO_MODE)
-					lram_in[input_addr+8'd1] <= {PALETTE[2], PIXELS[1:0], PIXELS[5:4]};
+				hpos <= hpos + 2'd2;
+				if (|d_in[7:6] || KANGAROO_MODE)
+					lram_in[hpos + 8'd0] <= {PALETTE[2], d_in[3:2], d_in[7:6]};
+				if (|d_in[5:4] || KANGAROO_MODE)
+					lram_in[hpos + 8'd1] <= {PALETTE[2], d_in[1:0], d_in[5:4]};
 			end
 			endcase
 		end

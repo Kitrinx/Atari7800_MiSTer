@@ -1,81 +1,69 @@
-// (C) Jamie Blanks, 2021
+// k7800 (c) by Jamie Blanks
 
-// For MiSTer use only.
+// k7800 is licensed under a
+// Creative Commons Attribution-NonCommercial 4.0 International License.
 
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
-`include "atari7800.vh"
-//`define OLD_TIA
+// You should have received a copy of the license along with this
+// work. If not, see http://creativecommons.org/licenses/by-nc/4.0/.
 
 module Atari7800(
-input  logic        clk_sys,
-input  logic        reset,
-output logic  [7:0] RED,
-output logic  [7:0] GREEN,
-output logic  [7:0] BLUE,
-output logic        HSync,
-output logic        VSync,
-output logic        HBlank,
-output logic        VBlank,
-output logic        ce_pix,
-input  logic        PAL,
-input  logic [1:0]  pal_temp,
-input  logic        hsc_en,
-output logic        hsc_ram_cs,
-input  logic  [7:0] hsc_ram_dout,
-output logic  [7:0] dout,
+	input  logic        clk_sys,
+	input  logic        reset,
+	output logic  [7:0] RED,
+	output logic  [7:0] GREEN,
+	output logic  [7:0] BLUE,
+	output logic        HSync,
+	output logic        VSync,
+	output logic        HBlank,
+	output logic        VBlank,
+	output logic        ce_pix,
+	input  logic        PAL,
+	input  logic [1:0]  pal_temp,
+	input  logic        hsc_en,
+	output logic        hsc_ram_cs,
+	input  logic  [7:0] hsc_ram_dout,
+	output logic  [7:0] dout,
 
-output logic [15:0] AUDIO_R,
-output logic [15:0] AUDIO_L,
-input logic         show_border,
-input logic         show_overscan,
-input logic         bypass_bios,
-input logic         tia_mode,
+	output logic [15:0] AUDIO_R,
+	output logic [15:0] AUDIO_L,
+	input logic         show_border,
+	input logic         show_overscan,
+	input logic         bypass_bios,
+	input logic         tia_mode,
 
-input  logic [7:0]  cart_xm,
-output logic        cart_read,
-input  logic [7:0]  cart_out, bios_out,
-output logic [15:0] AB,
-output logic [24:0] cart_addr_out,
-input  logic [15:0] cart_flags,
-input  logic  [7:0] cart_save,
-input  logic [31:0] cart_size,
-output logic        RW,
-input  logic        loading,
+	input  logic [7:0]  cart_xm,
+	output logic        cart_read,
+	input  logic [7:0]  cart_out, bios_out,
+	output logic [15:0] AB,
+	output logic [24:0] cart_addr_out,
+	input  logic [15:0] cart_flags,
+	input  logic  [7:0] cart_save,
+	input  logic [31:0] cart_size,
+	output logic        RW,
+	input  logic        loading,
 
-// Tia inputs
-input  logic  [3:0] idump,
-output logic  [3:0] i_out,
-input  logic  [1:0] ilatch,
+	// Tia inputs
+	input  logic  [3:0] idump,
+	output logic  [3:0] i_out,
+	input  logic  [1:0] ilatch,
 
-output logic        tia_en,
+	output logic        tia_en,
 
-// Riot inputs
-input  logic  [7:0] PAin,
-input  logic  [7:0] PBin,
-output logic  [7:0] PAout,
-output logic  [7:0] PBout,
-output logic        PAread,
-// 2600 Cart force flags based on detection
-input logic [3:0]  force_bs,
-input logic        sc,
-input logic [7:0]  clearval,
-output logic       tia_hsync,
-input  logic       use_stereo,
-input [10:0]       ps2_key
-
+	// Riot inputs
+	input  logic  [7:0] PAin,
+	input  logic  [7:0] PBin,
+	output logic  [7:0] PAout,
+	output logic  [7:0] PBout,
+	output logic        PAread,
+	// 2600 Cart force flags based on detection
+	input logic [3:0]  force_bs,
+	input logic        sc,
+	input logic [7:0]  clearval,
+	output logic       tia_hsync,
+	input  logic       use_stereo,
+	input [10:0]       ps2_key,
+	input              pokey_irq
 );
-	assign bios_DB_out = bios_out;
-	assign PAread = (CS == `CS_RIOT_IO) && ~|AB[4:0] && RW && pclk0;
 
 	/////////////
 	// Signals //
@@ -93,8 +81,7 @@ input [10:0]       ps2_key
 	logic [7:0]     tia_db_out;
 	logic           RDY;
 	logic           IRQ_n;
-	logic [7:0]     core_DB_out;
-	logic [15:0]    core_AB_out;
+	logic [15:0]    cpu_AB;
 	logic           cpu_halt_n;
 	logic           cpu_released;
 	logic           maria_en;
@@ -103,50 +90,50 @@ input [10:0]       ps2_key
 	logic [1:0]     ctrl_writes;
 	logic [7:0]     read_DB;
 	logic [7:0]     write_DB;
-	logic [7:0]     tia_DB_out, riot_DB_out, maria_DB_out, ram0_DB_out, ram1_DB_out, bios_DB_out, cart_DB_out;
-	`chipselect     CS;
+	logic [7:0]     tia_DB_out, riot_DB_out, maria_DB_out, ram0_DB_out, ram1_DB_out, cart_DB_out;
 	logic [15:0]    pokey_audio_r, pokey_audio_l, ym_audio_r, ym_audio_l;
 	logic           mclk0;
 	logic           mclk1;
-	logic           ram0_cs, ram1_cs, tia_cs, riot_cs, cart_cs;
+	logic           cs_ram0, cs_ram1, cs_tia, cs_riot, cs_maria;
 	logic [7:0]     open_bus;
 	wire            cart_read_flag;
 	logic [24:0]    cart_2600_addr_out, cart_7800_addr_out;
 	logic [7:0]     cart_2600_DB_out, cart_7800_DB_out;
 	logic           cpu_rwn;
+	logic [15:0]    covox_r, covox_l;
+	logic [15:0]    last_address;
+	logic           pclk1, pclk0;
 
 	assign RDY = maria_RDY && tia_RDY;
 	assign cpu_halt_n = (ctrl_writes == 2'd2) ? halt_n : 1'b1;
 	assign cart_read = cart_read_flag & mclk1;
 	assign cart_addr_out = cart_7800_addr_out; //tia_en ? cart_2600_addr_out : cart_7800_addr_out;
 	assign cart_DB_out = cart_7800_DB_out; //tia_en ? cart_2600_DB_out : cart_7800_DB_out;
+	assign PAread = cs_riot && ~|AB[4:0] && RW && pclk0;
 
 	// Track the open bus since FPGA's don't use bidirectional logic internally
-	always_ff @(posedge clk_sys)
-		if (cpu_released && mclk0 || ~cpu_released && pclk1 || ~RW)
-			open_bus <= ~RW ? write_DB : read_DB;
+	always_ff @(posedge clk_sys) begin
+		open_bus <= ~RW ? write_DB : read_DB;
+		last_address <= AB;
+	end
+
+	wire cs_cart = ~|{cs_ram0, cs_ram1, cs_tia, cs_riot, cs_maria};
 
 	always_comb begin
-		ram0_cs = 1'b0;
-		ram1_cs = 1'b0;
-		tia_cs = 1'b0;
-		riot_cs = 1'b0;
-		cart_cs = 1'b0;
 		read_DB = open_bus;
-		case (CS)
-			`CS_RAM0:     begin ram0_cs = 1'b1;  read_DB = ram0_DB_out; end
-			`CS_RAM1:     begin ram1_cs = 1'b1;  read_DB = ram1_DB_out; end
-			`CS_BIOS:     begin                  read_DB = bios_DB_out; end
-			`CS_TIA:      begin tia_cs = 1'b1;   read_DB = {tia_DB_out[7:6], open_bus[5:0]}; end
-			`CS_RIOT_IO:  begin riot_cs = 1'b1;  read_DB = riot_DB_out; end
-			`CS_CART:     begin cart_cs = 1'b1;  read_DB = cart_DB_out; end
-			`CS_MARIA:    begin                  read_DB = maria_DB_out; end
-			`CS_RIOT_RAM: begin riot_cs = 1'b1;  read_DB = riot_DB_out; end
-			default: cart_cs = 0;
-		endcase
+		if (cs_ram0)  read_DB = ram0_DB_out;
+		if (cs_ram1)  read_DB = ram1_DB_out;
+		if (cs_tia)   read_DB = {tia_DB_out[7:6], open_bus[5:0]};
+		if (cs_riot)  read_DB = riot_DB_out;
+		if (cs_cart)  read_DB = (~bios_en_b && AB[15] ? bios_out : cart_DB_out);
+		if (cs_maria) read_DB = maria_DB_out;
 
-		write_DB = core_DB_out;
-		AB = (cpu_released ? 16'hFFFF : core_AB_out) & (maria_drive_AB ? maria_AB_out : 16'hFFFF);
+		case ({~cpu_released, maria_drive_AB})
+			2'b00 : AB = last_address;
+			2'b01 : AB = maria_AB_out;
+			2'b10 : AB = cpu_AB;
+			2'b11 : AB = cpu_AB & maria_AB_out;
+		endcase
 		RW = cpu_released ? 1'b1 : cpu_rwn;
 	end
 
@@ -161,7 +148,7 @@ input [10:0]       ps2_key
 		.clock          (clk_sys),
 		.address        (loading ? clear_addr : AB[10:0]),
 		.data           (loading ? clearval : write_DB),
-		.wren           ((~RW & ram0_cs & pclk0) || loading),
+		.wren           ((~RW & cs_ram0 & pclk0) || loading),
 		.q              (ram0_DB_out)
 	);
 
@@ -170,13 +157,12 @@ input [10:0]       ps2_key
 		.clock          (clk_sys),
 		.address        (loading ? clear_addr : AB[10:0]),
 		.data           (loading ? clearval : write_DB),
-		.wren           ((~RW & ram1_cs & pclk0) || loading),
+		.wren           ((~RW & cs_ram1 & pclk0) || loading),
 		.q              (ram1_DB_out)
 	);
 
 	// MARIA
 	logic maria_vblank, maria_vblank_ex, maria_vsync, maria_hblank, maria_hsync;
-	logic pclk1, pclk0;
 	logic [3:0] maria_luma, maria_chroma;
 
 	maria maria_inst(
@@ -188,20 +174,22 @@ input [10:0]       ps2_key
 		.hide_border    (~show_border),
 		.bypass_bios    (bypass_bios),
 		.PAL            (PAL),
-		.read_DB_in     (read_DB),
+		.d_in           (read_DB),
 		.write_DB_in    (write_DB),
 		.DB_out         (maria_DB_out),
-		.bios_en        (~bios_en_b),
 		.reset          (reset),
 		.clk_sys        (clk_sys),
 		.pclk0          (pclk0),
 		.pclk1          (pclk1),
 		.pclk2          (pclk0),
-		.tia_en         (tia_en),
-		.CS             (CS),
 		.RW             (RW),
 		.maria_en       (maria_en),
 		.YC             ({maria_chroma, maria_luma}),
+		.cs_ram0        (cs_ram0),
+		.cs_ram1        (cs_ram1),
+		.cs_riot        (cs_riot),
+		.cs_tia         (cs_tia),
+		.cs_maria       (cs_maria),
 		.NMI_n          (NMI_n),
 		.halt_n         (halt_n),
 		.ready          (maria_RDY),
@@ -238,8 +226,8 @@ input [10:0]       ps2_key
 		.lum            (tia_luma),
 		.BLK_n          (tia_blank_n),
 		.sync           (),
-		.cs0_n          (~tia_cs),
-		.cs2_n          (~tia_cs),
+		.cs0_n          (~cs_tia),
+		.cs2_n          (~cs_tia),
 		.rst            (reset),
 		.video_ce       (tia_pix_ce),
 		.vblank         (tia_vblank),
@@ -248,6 +236,7 @@ input [10:0]       ps2_key
 		.vsync          (tia_vsync),
 		.hsync          (tia_hsync),
 		.phi2_gen       (),
+		.phi1_in        (pclk1),
 		.open_bus       (open_bus)
 	);
 
@@ -303,8 +292,8 @@ input [10:0]       ps2_key
 	wire [15:0] tia_r = (use_stereo ? audio_lut_single[audv0] : audio_lut[aud_index]);
 	wire [15:0] tia_l = (use_stereo ? audio_lut_single[audv1] : audio_lut[aud_index]);
 
-	assign AUDIO_R = tia_r + pokey_audio_r + ym_audio_r;
-	assign AUDIO_L = tia_l + pokey_audio_l + ym_audio_l;
+	assign AUDIO_R = tia_r + pokey_audio_r + ym_audio_r + covox_r;
+	assign AUDIO_L = tia_l + pokey_audio_l + ym_audio_l + covox_l;
 
 	M6532 #(.init_7800(1)) riot_inst_2
 	(
@@ -318,7 +307,7 @@ input [10:0]       ps2_key
 		.RS_n         (AB[9]),
 		.IRQ_n        (),
 		.CS1          (AB[7]),
-		.CS2_n        (~riot_cs),
+		.CS2_n        (~cs_riot),
 		.PA_in        (PAin),
 		.PA_out       (PAout),
 		.PB_in        (PBin),
@@ -330,9 +319,9 @@ input [10:0]       ps2_key
 		.pclk1        (pclk1),
 		.clk_sys      (clk_sys),
 		.reset        (reset),
-		.AB           (core_AB_out),
+		.AB           (cpu_AB),
 		.DB_IN        (read_DB),
-		.DB_OUT       (core_DB_out),
+		.DB_OUT       (write_DB),
 		.RD           (cpu_rwn),
 		.IRQ_n        (IRQ_n),
 		.NMI_n        (NMI_n),
@@ -346,7 +335,7 @@ input [10:0]       ps2_key
 		.clk          (clk_sys),
 		.pclk0        (pclk0),
 		.d_in         (write_DB[3:0]),
-		.cs           (tia_cs),
+		.cs           (cs_tia),
 		.latch_b      (RW | lock_ctrl),
 		.rst          (reset),
 		.lock_out     (lock_ctrl),
@@ -372,7 +361,7 @@ input [10:0]       ps2_key
 		.cart_flags   (cart_flags),
 		.cart_size    (cart_size),
 		.cart_save    (cart_save),
-		.cart_cs      (cart_cs),
+		.cart_cs      (cs_cart),
 		.cart_xm      (cart_xm),
 		.cart_read    (cart_read_flag),
 		.hsc_en       (hsc_en),
@@ -386,7 +375,10 @@ input [10:0]       ps2_key
 		.ym_audio_l   (ym_audio_l),
 		.rom_address  (cart_7800_addr_out),
 		.open_bus     (open_bus),
-		.ps2_key      (ps2_key)
+		.covox_r      (covox_r),
+		.covox_l      (covox_l),
+		.ps2_key      (ps2_key),
+		.pokey_irq_en (pokey_irq)
 	);
 
 	cart2600 cart2600
@@ -469,7 +461,7 @@ module M6502C
 	output        is_halted  // This is used to indicate that sally has released the bus
 );
 
-	assign is_halted = ~(cpu_halt_n && halt_n);
+	assign is_halted = ~(cpu_halt_n);
 
 	logic cpu_halt_n = 0;
 
@@ -479,7 +471,7 @@ module M6502C
 
 		.Res_n(~reset),
 		.Clk(clk_sys),
-		.Enable(pclk1 && cpu_halt_n && halt_n),
+		.Enable(pclk1 && cpu_halt_n),
 		.Rdy(RDY),
 
 		.IRQ_n(IRQ_n),

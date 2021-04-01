@@ -1,51 +1,41 @@
-/************************************************************************
-* (C) Jamie Blanks, 2021                                                *
-*                                                                       *
-* This program is free software: you can redistribute it and/or modify  *
-* it under the terms of the GNU General Public License as published by  *
-* the Free Software Foundation, either version 3 of the License, or     *
-* (at your option) any later version.                                   *
-*                                                                       *
-* This program is distributed in the hope that it will be useful,       *
-* but WITHOUT ANY WARRANTY; without even the implied warranty of        *
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
-* GNU General Public License for more details.                          *
-*                                                                       *
-* You should have received a copy of the GNU General Public License     *
-* along with this program.  If not, see <https://www.gnu.org/licenses/>.*
-************************************************************************/
+// k7800 (c) by Jamie Blanks
 
-`include "atari7800.vh"
+// k7800 is licensed under a
+// Creative Commons Attribution-NonCommercial 4.0 International License.
+
+// You should have received a copy of the license along with this
+// work. If not, see http://creativecommons.org/licenses/by-nc/4.0/.
+
 
 module maria(
-	output logic        mclk0,
-	output logic        mclk1,
+	// Busses
 	input  logic [15:0] AB_in,
 	output logic [15:0] AB_out,
-
-	input  logic        PAL,
-
-	input  logic  [7:0] read_DB_in,
+	input  logic  [7:0] d_in,
 	input  logic  [7:0] write_DB_in,
 	output logic  [7:0] DB_out,
-	output logic        pclk0,
-	output logic        pclk1,
-	input logic         pclk2,
 
 	// Clocking
 	input logic         reset,
 	input logic         clk_sys, 
+	output logic        mclk0,
+	output logic        mclk1,
+	output logic        pclk0,
+	output logic        pclk1,
+	input logic         pclk2,
 
-	// Memory Map Select lines
-	output `chipselect  CS,
-	input logic         bios_en,
-	input logic         tia_en,
+	// Chip Select lines
+	output logic        cs_ram0,
+	output logic        cs_ram1,
+	output logic        cs_riot,
+	output logic        cs_tia,
+	output logic        cs_maria,
 
 	// Maria configuration
 	input logic         RW, 
 	input logic         maria_en,
 
-	// VGA Interface
+	// Video
 	output logic [7:0]  YC,
 	output logic        hsync,
 	output logic        vsync,
@@ -53,15 +43,17 @@ module maria(
 	output logic        vblank,
 	output logic        vblank_ex,
 
-	// Outputs to 6502
+	// CPU
 	output logic        NMI_n,
 	output logic        halt_n,
 	output logic        ready,
 
 	// Abstract Pins
-	output logic        drive_AB,
-	input  logic        hide_border,
-	input  logic        bypass_bios
+	output logic        drive_AB,    // Used to overcome the lack of a bidirectional bus
+	input  logic        hide_border, // Option to hide the boarder
+	input  logic        bypass_bios, // Flag to tell maria to initialize to a post-bios state
+	input  logic        PAL          // Indicates the system is in either NTSC or PAL
+
 );
 
 	/* Original Pins:
@@ -107,7 +99,7 @@ module maria(
 	logic             hbs;
 	logic             lrc;
 	logic             wm;
-	logic             clear_hpos;
+	logic             latch_hpos;
 	logic             halt_en;
 	logic             DLI_en;
 	logic             dli_latch;
@@ -118,15 +110,13 @@ module maria(
 	logic             sel_slow_clock;
 	logic             NMI_ung_n;
 	logic             slow_clk_latch;
+	logic             ready_int;
+
 	// Apply color kill if needed
 	assign YC = UV_out & (ctrl[7] ? 8'h0F : 8'hFF);
 
-	assign halt_n = ~halt_en;
-
 	// Maria being enabled is a condition for NMI
 	assign NMI_n = NMI_ung_n || ~maria_en;
-
-	wire dma_en = (ctrl[6:5] == 2'b10);
 
 	always @(posedge clk_sys) begin
 		if (reset) begin
@@ -139,34 +129,42 @@ module maria(
 			mclk0 <= 0;
 			pclk0 <= 0;
 			pclk1 <= 0;
+			ready_int <= 1;
 			slow_clk_latch <= 0;
 		end else begin
-			// if (PAL)
-			// 	pal_counter <= pal_counter + 1'd1;
-			// else
-			// 	pal_counter <= 0;
+			if (PAL)
+				pal_counter <= pal_counter + 1'd1;
+			else
+				pal_counter <= 0;
 
 			mclk1 <= 0;
 			mclk0 <= 0;
 
-			if (pal_counter == 109)
+			if (pal_counter == 109) begin
 				pal_counter <= 0;
-			else begin
+				mclk0 <= 0;
+				mclk1 <= 0;
+			end else begin
 				mclk0 <= clk_toggle;
 				mclk1 <= ~clk_toggle;
 				clk_toggle <= ~clk_toggle;
 			end
 
 			if (deassert_ready)
-				ready <= 1'b0;
+				ready_int <= 1'b0;
 			else if (lrc)
-				ready <= 1'b1;
+				ready_int <= 1'b1;
 
 			pclk0 <= 0;
 			pclk1 <= 0;
 
 			if (pclk_toggle)
 				slow_clk_latch <= sel_slow_clock;
+			
+			if (~pclk_toggle) begin
+				ready <= ready_int;
+				halt_n <= ~halt_en;
+			end
 
 			if (mclk1) begin
 				if (clock_div)
@@ -181,55 +179,55 @@ module maria(
 		end
 	end
 
-	line_ram line_ram_inst(
-		.mclk0         (mclk0),
-		.mclk1         (mclk1),
-		.border        (border),
-		.clk_sys       (clk_sys),
-		.latch_byte    (latch_byte),
-		.clear_hpos    (clear_hpos),
-		.RESET         (reset || ~maria_en),
-		.PLAYBACK      (UV_out),
-		.hpos          (hpos),
-		.PALETTE       (palette),
-		.PIXELS        (read_DB_in),
-		.WM            (wm),
-		.COLOR_MAP     (color_map),
-		.RM            (ctrl[1:0]),
-		.KANGAROO_MODE (ctrl[2]),
-		.BORDER_CONTROL(ctrl[3]),
-		.DMA_EN        (dma_en),
-		.COLOR_KILL    (ctrl[7]),
-		.lrc           (lrc)
+	line_ram line_ram_inst (
+		.mclk0           (mclk0),
+		.mclk1           (mclk1),
+		.border          (border),
+		.clk_sys         (clk_sys),
+		.latch_byte      (latch_byte),
+		.latch_hpos      (latch_hpos),
+		.RESET           (reset || ~maria_en),
+		.PLAYBACK        (UV_out),
+		.PALETTE         (palette),
+		.d_in            (d_in),
+		.WM              (wm),
+		.COLOR_MAP       (color_map),
+		.RM              (ctrl[1:0]),
+		.KANGAROO_MODE   (ctrl[2]),
+		.BORDER_CONTROL  (ctrl[3]),
+		.COLOR_KILL      (ctrl[7]),
+		.lrc             (lrc)
 	);
 
-	memory_map memory_map_inst(
-		.mclk0          (mclk0),
-		.mclk1          (mclk1),
-		.maria_en       (maria_en),
-		.tia_en         (tia_en),
-		.AB             (AB_in),
-		.DB_in          (write_DB_in),
-		.DB_out         (DB_out),
-		.RW             (RW),
-		.cs             (CS),
-		.bios_en        (bios_en),
-		.drive_AB       (drive_AB),
-		.ctrl           (ctrl),
-		.color_map      (color_map),
-		.status_read    ({vblank, 7'b0}),
-		.char_base      (char_base),
-		.ZP             (ZP),
-		.pal            (PAL),
-		.sel_slow_clock (sel_slow_clock),
-		.deassert_ready (deassert_ready),
-		.clk_sys        (clk_sys),
-		.reset_b        (~reset),
-		.pclk0          (pclk2),
-		.bypass_bios    (bypass_bios)
+	control control_inst (
+		.mclk0           (mclk0),
+		.mclk1           (mclk1),
+		.maria_en        (maria_en),
+		.AB              (AB_in),
+		.DB_in           (write_DB_in),
+		.DB_out          (DB_out),
+		.RW              (RW),
+		.drive_AB        (drive_AB),
+		.ctrl            (ctrl),
+		.color_map       (color_map),
+		.status_read     ({vblank, 7'b0}),
+		.char_base       (char_base),
+		.ZP              (ZP),
+		.pal             (PAL),
+		.sel_slow_clock  (sel_slow_clock),
+		.deassert_ready  (deassert_ready),
+		.clk_sys         (clk_sys),
+		.reset           (reset),
+		.pclk0           (pclk2),
+		.bypass_bios     (bypass_bios),
+		.cs_ram0         (cs_ram0),
+		.cs_ram1         (cs_ram1),
+		.cs_riot         (cs_riot),
+		.cs_tia          (cs_tia),
+		.cs_maria        (cs_maria)
 	);
 
-	dma_ctrl dma_ctrl_inst (
+	dma dma_inst (
 		.clk_sys         (clk_sys),
 		.reset           (reset || ~maria_en),
 		.mclk0           (mclk0),
@@ -238,44 +236,44 @@ module maria(
 		.vbe             (vbe),
 		.hbs             (hbs),
 		.lrc             (lrc),
-		.dma_en          (dma_en),
 		.pclk1           (pclk1),
 		.pclk0           (pclk0),
-		.AddrB           (AB_out),
+		.DM              (ctrl[6:5]),
+		.AB              (AB_out),
 		.drive_AB        (drive_AB),
 		.latch_byte      (latch_byte),
-		.DataB           (read_DB_in),
-		.clear_hpos      (clear_hpos),
+		.d_in            (d_in),
+		.latch_hpos      (latch_hpos),
 		.HALT            (halt_en),
 		.HPOS            (hpos),
 		.DLI             (DLI_en),
 		.WM              (wm),
 		.PAL             (palette),
 		.ZP              (ZP),
-		.character_width (ctrl[4]),
+		.char_width (ctrl[4]),
 		.char_base       (char_base),
 		.bypass_bios     (bypass_bios),
 		.nmi_n           (NMI_ung_n)
 	);
-
-	video_sync sync (
-		.mclk0       (mclk0),
-		.mclk1       (mclk1),
-		.clk         (clk_sys),
-		.reset       (reset || ~maria_en),
-		.bypass_bios (bypass_bios),
-		.PAL         (PAL),
-		.HSync       (hsync),
-		.VSync       (vsync),
-		.hblank      (hblank),
-		.vblank      (vblank),
-		.vblank_ex   (vblank_ex),
-		.border      (border),
-		.hide_border (hide_border),
-		.lrc         (lrc),
-		.prst        (prst),
-		.vbe         (vbe),
-		.hbs         (hbs)
+	
+	video_sync sync_inst (
+		.mclk0           (mclk0),
+		.mclk1           (mclk1),
+		.clk             (clk_sys),
+		.reset           (reset || ~maria_en),
+		.bypass_bios     (bypass_bios),
+		.PAL             (PAL),
+		.HSync           (hsync),
+		.VSync           (vsync),
+		.hblank          (hblank),
+		.vblank          (vblank),
+		.vblank_ex       (vblank_ex),
+		.border          (border),
+		.hide_border     (hide_border),
+		.lrc             (lrc),
+		.prst            (prst),
+		.vbe             (vbe),
+		.hbs             (hbs)
 	);
 
 endmodule

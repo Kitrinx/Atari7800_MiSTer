@@ -1,17 +1,11 @@
-// (C) Jamie Blanks, 2021
+// k7800 (c) by Jamie Blanks
 
-// For MiSTer use only.
+// k7800 is licensed under a
+// Creative Commons Attribution-NonCommercial 4.0 International License.
 
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+// You should have received a copy of the license along with this
+// work. If not, see http://creativecommons.org/licenses/by-nc/4.0/.
 
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
 
 // Covers the bank switching, ram, and audio hardware from carts
 module cart
@@ -34,6 +28,7 @@ module cart
 	input  logic  [7:0] cart_xm,
 	input  logic  [7:0] open_bus,
 	input  logic [10:0] ps2_key,
+	input  logic        pokey_irq_en,
 	output logic        IRQ_n,
 	output logic [7:0]  dout,
 	output logic        hsc_ram_cs,
@@ -42,10 +37,11 @@ module cart
 	output logic [15:0] pokey_audio_l,
 	output logic [15:0] ym_audio_r,
 	output logic [15:0] ym_audio_l,
+	output logic [15:0] covox_r,
+	output logic [15:0] covox_l,
 	output logic [24:0] rom_address
 );
 
-assign IRQ_n = 1'b1;
 logic [7:0] bank_reg;
 logic [7:0] ram_dout;
 logic [7:0] ym_dout;
@@ -67,6 +63,7 @@ logic [24:0] souper_addr;
 wire souper_en = cart_flags[12];
 logic [11:0] souper_bank;
 logic souper_wr;
+logic pokey_irq_n, ym_irq_n;
 
 wire XCTRL1_cs = (cart_xm[0] && address_in[15:4] == 8'h47) && cart_cs;
 always @(posedge clk_sys) begin
@@ -174,10 +171,14 @@ always_ff @(posedge clk_sys) if (pclk1) begin
 
 end
 
+// Maybe a mapper will use it someday...
+assign IRQ_n = pokey_irq_en ? pokey_irq_n : 1'b1;
+
 wire is_pokey_450 = (((cart_flags[6] || XCTRL1[4]) && address_in[15:4] == 12'h45) && cart_cs);
 wire is_pokey_440 = (((cart_flags[10] || XCTRL1[4]) && address_in[15:4] == 8'h44) && cart_cs);
 wire is_pokey_4k = ((cart_flags[0] && address_in[15:14] == 2'b01) && cart_cs);
 wire pokey4k_wo = cart_flags[0] && cart_flags[3];
+wire is_covox = address_in[15:4] == 12'h43;
 
 wire is_ym = (((cart_flags[11] || XCTRL1[7]) && address_in[15:1] == 15'h230) && cart_cs);
 
@@ -231,10 +232,19 @@ end
 //03 - RAM
 //04 - Banked ROM
 
+logic [7:0] covox_reg[4];
+
+assign covox_r = {{1'b0, covox_reg[0]} + covox_reg[1], 7'd0};
+assign covox_l = {{1'b0, covox_reg[2]} + covox_reg[3], 7'd0};
+
 always_ff @(posedge clk_sys) begin
 	if (reset) begin
 		bank_reg <= 8'd0;
+		covox_reg <= '{8'd0, 8'd0, 8'd0, 8'd0};
 	end else if (~rw & cart_cs & pclk0) begin
+		if (is_covox) begin
+			covox_reg[address_in[1:0]] <= din;
+		end
 		if (bank_type == 3'd0 && address_in[15:14] == 2'b10) //supergame bank
 			bank_reg <= din;
 		else if (bank_type == 3'd1 && (address_in[15:4]) == 12'hFF8) // activision bank
@@ -290,7 +300,7 @@ end
 
 logic [3:0] ch0, ch1, ch2, ch3, ch0_2, ch1_2, ch2_2, ch3_2;
 logic [5:0] pokey_mux, pokey2_mux;
-logic [3:0] pokey_ce, pokey2_cs;
+logic [3:0] ym_ce, pokey2_cs;
 logic using_two_pokey;
 
 always @(posedge clk_sys) begin
@@ -298,7 +308,7 @@ always @(posedge clk_sys) begin
 		using_two_pokey <= 0;
 	if (is_pokey_440)
 		using_two_pokey <= 1;
-	pokey_ce <= pokey_ce + 1'd1;
+	ym_ce <= ym_ce + 1'd1;
 	pokey_mux <= ch0 + ch1 + ch2 + ch3;
 	pokey2_mux <= ch0_2 + ch1_2 + ch2_2 + ch3_2;
 end
@@ -344,7 +354,7 @@ pokey the_penguin (
 	.CHANNEL_2_OUT        (ch2),
 	.CHANNEL_3_OUT        (ch3),
 
-	.IRQ_N_OUT            (),
+	.IRQ_N_OUT            (pokey_irq_n),
 	.SIO_OUT1             (),
 	.SIO_OUT2             (),
 	.SIO_OUT3             (),
@@ -389,11 +399,11 @@ pokey return_of_pokey (
 
 wire [15:0] ym_audio_lo, ym_audio_ro;
 
-jt51 ym2151 ( // FIXME: This clock is not exact
+jt51 ym2151 (
 	.rst      (reset),
 	.clk      (clk_sys),
-	.cen      (!pokey_ce[1:0]),
-	.cen_p1   (!pokey_ce[2:0]), 
+	.cen      (pclk1 || pclk0),
+	.cen_p1   (pclk0),
 	.cs_n     (~ym_cs),
 	.wr_n     (rw),
 	.a0       (address_in[0]),
@@ -401,7 +411,7 @@ jt51 ym2151 ( // FIXME: This clock is not exact
 	.dout     (ym_dout),
 	.ct1      (),
 	.ct2      (),
-	.irq_n    (),
+	.irq_n    (ym_irq_n),
 	.sample   (),
 	.left     (),
 	.right    (),
@@ -412,7 +422,7 @@ jt51 ym2151 ( // FIXME: This clock is not exact
 );
 
 always @(posedge clk_sys) begin
-	if (cart_flags[11]) begin
+	if (cart_flags[11] || XCTRL1[7]) begin
 		ym_audio_r <= ym_audio_ro;
 		ym_audio_l <= ym_audio_lo;
 	end else begin

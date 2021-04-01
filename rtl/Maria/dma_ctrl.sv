@@ -34,13 +34,19 @@ module dma_ctrl(
 	output logic [7:0]  HPOS,
 	output logic        DLI,
 	output logic        WM,
+	input  logic [1:0]  DM,
 	output logic [2:0]  PAL,
 	input logic [15:0]  ZP,
 	input logic         character_width,
 	input logic [7:0]   char_base,
 	input logic         bypass_bios,
 	output logic [6:0]  sel_out,
-	output logic        nmi_n
+	output logic        nmi_n,
+	output logic [19:0] dm_test,
+	output logic [19:0] dm_test2,
+	output logic rss0_t,
+	output logic rss1_t,
+	output [47:0] dmas
 );
 
 typedef enum logic [4:0] {
@@ -132,10 +138,10 @@ logic [4:0] cond;
 // though the blanks attempt to asset it, it fails because of haltrst.
 
 // RSS0, RSS1
-// 1     0    = ZP DMA
-// 0     1    = DP DMA
-// 0     0    = End DMA
-// 1     1    = Invalid
+// 0     1    = ZP DMA
+// 1     0    = DP DMA
+// 0     0    = No action
+// 1     1    = Abort DMA
 // DMA is disabled when HALTRST takes place, which occurs when RSS is 00 or DMA ends
 
 assign cond = {pclk1, HALT, DLI, |sel_last[5:1], |sel_last[2:1]};
@@ -152,9 +158,11 @@ assign sel_out = sel;
 logic sel5_next;
 logic nmi_set;
 logic is_zp;
+logic RSS1, RSS0;
 
 logic [3:0] z_start, d_start, z_end, d_end;
 logic is_zp_dma;
+logic vbe_halt, hbs_halt;
 
 // Probes probe (
 // 	.source ({z_start, d_start, z_end, d_end}),
@@ -182,6 +190,8 @@ always_ff @(posedge clk_sys) if (reset) begin
 	WM <= 0;
 	A12en <= 0;
 	A11en <= 0;
+	vbe_halt <= 0;
+	hbs_halt <= 0;
 	HALT <= 0;
 	is_zp <= 0;
 	nmi_n <= 1;
@@ -207,14 +217,22 @@ end else if (mclk0) begin
 
 	if (hbs) begin // This starts on the rising edge of "blank" which stays true if either blank is true.
 		vbe_trigger <= 0;
+		if (~vblank)
+			hbs_halt <= 1;
 		if (dma_en && ~vblank)
 			HALT <= 1;
 	end
 	if (vbe) begin
 		vbe_trigger <= 1;
+		vbe_halt <= 1;
 		if (dma_en)
 			HALT <= 1;
 	end
+	if (HALTRST) begin
+		vbe_halt <= 0;
+		hbs_halt <= 0;
+	end
+
 	case (state)
 		// Wait for starting condition
 		DMA_WAIT_DP,
@@ -282,8 +300,6 @@ end else if (mclk0) begin
 			case (substate)
 				0: AddrB <= DL_PTR;
 				1: begin
-					IND <= 0;
-					width_ovr <= 0;
 					PIX_PTR[7:0] <= DataB;
 					DL_PTR <= DL_PTR + 1'd1;
 					AddrB <= DL_PTR + 1'd1;
@@ -300,6 +316,10 @@ end else if (mclk0) begin
 				0: AddrB <= DL_PTR;
 				1: begin
 					DL_PTR <= DL_PTR + 1'd1;
+					WIDTH <= DataB[4:0];
+					LONGHDR <= 0;
+					IND <= 0;
+					width_ovr <= 0;
 					substate <= 0;
 					// Maria apparently only checks 0x5F as a bit pattern
 					// for end-of-zone markers, not for 0.
@@ -310,7 +330,7 @@ end else if (mclk0) begin
 							state <= DMA_END;
 						end
 						shutting_down <= 1;
-					end else if (~|DataB[4:0]) begin/// Long header
+					end else if (~|DataB[4:0]) begin // Long header
 						LONGHDR <= 1;
 						WM <= DataB[7];
 						IND <= DataB[5];
@@ -373,6 +393,8 @@ end else if (mclk0) begin
 					state <= IND ? DMA_INDIRECT_PTR : DMA_DIRECT;
 					// Check for holey DMA
 					if (((AHPO[3] & A11en) | (AHPO[4] & A12en)) & AHPO[7]) begin
+						width_ovr <= 1;
+						WIDTH <= 0;
 						state <= DMA_HOLEY_COOLDOWN;
 					end
 					substate <= 0;
@@ -529,5 +551,190 @@ end else if (mclk0) begin
 	end
 
 end
+
+assign dm_test = {PLA0, PLA1, PLA2, PLA3, PLA4, ABENF, ELRWA, ALATCON, DSEL, INTENBL,
+	ASEL, RLD0, XEN0, RLD1, XEN1, RDL2, XEN2, RLD3, LRICLD, HALTRST};
+
+assign rss1_t = RSS1;
+assign rss0_t = RSS0;
+
+logic PLA0, PLA1, PLA2, PLA3, PLA4, ABENF, ELRWA, ALATCON, DSEL, INTENBL,
+	ASEL, RLD0, XEN0, RLD1, XEN1, RDL2, XEN2, RLD3, LRICLD, HALTRST;
+
+logic TLD, DPPHLD, DPPLLD, DPRLLD, DPRHLD, DPHLD, DPLLD, PPLLD, PPHLD, OFFLD, WLATLDF, DLILDF, WLD1F;
+logic DPPREN, CBTEN, DPPEN, DPREN, DPEN, PPEN, WEN;
+
+//logic [47:0] dmas;
+wire [3:0] rldcmp = ({RLD3, RDL2, RLD1, RLD0});
+
+wire [13:0] cond2 = {PLA0, PLA1, PLA2, PLA3, PLA4, character_width, DM[1], DM[0], LONGHDR,
+	IND, OFFSET == 0, WIDTH == 0 || width_ovr, ~RSS1, ~RSS0};
+// NOTE: The indexing of this is the opposite of the schematic
+assign dmas[47] = cond2 ==? 14'b10010x10xxxx00;
+assign dmas[46] = cond2 ==? 14'b10010x10xxxx11;
+assign dmas[45] = cond2 ==? 14'b00010x10xxxxxx;
+assign dmas[44] = cond2 ==? 14'b10010x10xxxx10;
+assign dmas[43] = cond2 ==? 14'b10010x01xxxxxx;
+assign dmas[42] = cond2 ==? 14'b01101xxxxxx111;
+assign dmas[41] = cond2 ==? 14'b01010xxxxxxx11;
+assign dmas[40] = cond2 ==? 14'b11010xxxxxxx11;
+assign dmas[39] = cond2 ==? 14'b00110xxxxxxx11;
+assign dmas[38] = cond2 ==? 14'b10110xxxxxxx11;
+assign dmas[37] = cond2 ==? 14'b01110xxxxxxx11;
+assign dmas[36] = cond2 ==? 14'b11110xxxxxxx11;
+assign dmas[35] = cond2 ==? 14'b00001xxx1xx111;
+assign dmas[34] = cond2 ==? 14'b10001xxxxxxx11;
+assign dmas[33] = cond2 ==? 14'b00001xxxxxx011;
+assign dmas[32] = cond2 ==? 14'b01001xxxxxxx11;
+assign dmas[31] = cond2 ==? 14'b11001xxxx1xx11;
+assign dmas[30] = cond2 ==? 14'b11001xxxx0xx11; // ???
+assign dmas[29] = cond2 ==? 14'b00101xxxx0xx11;
+assign dmas[28] = cond2 ==? 14'b11101xxxx0xx11;
+assign dmas[27] = cond2 ==? 14'b010110xxxxxx11;
+assign dmas[26] = cond2 ==? 14'b10111xxxxxxx11;
+assign dmas[25] = cond2 ==? 14'b10101x10x1xx11;
+assign dmas[24] = cond2 ==? 14'b10101x01x1xx11;
+assign dmas[23] = cond2 ==? 14'b10101xxxx0xx11;
+assign dmas[22] = cond2 ==? 14'b01101xxxx1x011;
+assign dmas[21] = cond2 ==? 14'b01101xxxx0x011;
+assign dmas[20] = cond2 ==? 14'b00101xxxx1xx11;
+assign dmas[19] = cond2 ==? 14'b11101xxxx1xx11;
+assign dmas[18] = cond2 ==? 14'b00011xxxxxxx11;
+assign dmas[17] = cond2 ==? 14'b10011xxxxxxx11;
+assign dmas[16] = cond2 ==? 14'b010111xxxxxx11;
+assign dmas[15] = cond2 ==? 14'b11011xxxxxxx11;
+assign dmas[14] = cond2 ==? 14'b00111xxxxxxx11;
+assign dmas[13] = cond2 ==? 14'b00000xxxxxxxxx;
+assign dmas[12] = cond2 ==? 14'b10010x10xxxx01;
+assign dmas[11] = cond2 ==? 14'b10010x00xxxxxx;
+assign dmas[10] = cond2 ==? 14'b10000xxxxx1xxx;
+assign dmas[9 ] = cond2 ==? 14'b01000xxxxxxxxx; // ???
+assign dmas[8 ] = cond2 ==? 14'b11000xxxxxxxxx;
+assign dmas[7 ] = cond2 ==? 14'b00100xxxxxxxxx;
+assign dmas[6 ] = cond2 ==? 14'b10100xxxxxxxxx;
+assign dmas[5 ] = cond2 ==? 14'b01100xxxxxxxxx;
+assign dmas[4 ] = cond2 ==? 14'b10010x11xxxxxx;
+assign dmas[3 ] = cond2 ==? 14'b10000xxxxx0xxx;
+assign dmas[2 ] = cond2 ==? 14'b11100xxxxxxxxx;
+assign dmas[1 ] = cond2 ==? 14'b00010x11xxxxxx;
+assign dmas[0 ] = cond2 ==? 14'b00010x0xxxxxxx;
+assign dm_test2 = {7'd0, TLD, DPPHLD, DPPLLD, DPRLLD, DPRHLD, DPHLD, DPLLD, PPLLD, PPHLD, OFFLD, WLATLDF, DLILDF, WLD1F};
+logic data_en;
+
+always @(posedge clk_sys) begin
+
+	if (mclk0) begin
+		RSS1 <= (vbe_halt && sel[5]);
+		RSS0 <= (hbs_halt && sel[5]);
+
+
+
+	end else if (mclk1) begin
+		{DPPREN, CBTEN, DPPEN, DPREN, DPEN, PPEN, WEN} <= '0;
+
+		// case ({XEN2, XEN1, XEN0})
+		// 	3'b101: DPPREN <= 1'b1;
+		// 	3'b100: CBTEN <= 1'b1;
+		// 	3'b011: DPPEN <= 1'b1;
+		// 	3'b010: DPREN <= 1'b1;
+		// 	3'b001: DPEN <= 1'b1;
+		// 	3'b000: PPEN <= 1'b1;
+		// 	3'b110: WEN <= 1'b1;
+		// endcase
+
+		case ({XEN2, XEN1, XEN0})
+			3'b010: DPPREN <= 1'b1;
+			3'b011: CBTEN <= 1'b1;
+			3'b100: DPPEN <= 1'b1;
+			3'b101: DPREN <= 1'b1;
+			3'b110: DPEN <= 1'b1;
+			3'b111: PPEN <= 1'b1;
+			3'b001: WEN <= 1'b1;
+		endcase
+
+		TLD     <= rldcmp ==? 4'b0010; //1101;
+		DPPHLD  <= rldcmp ==? 4'b010X; //101x;
+		DPPLLD  <= rldcmp ==? 4'b010X; //101x;
+		DPRLLD  <= rldcmp ==? 4'b0110; //1001;
+		DPRHLD  <= rldcmp ==? 4'b0111; //1000;
+		DPHLD   <= rldcmp ==? 4'b0011; //1100;
+		DPLLD   <= rldcmp ==? 4'b0011; //1100;
+		PPLLD   <= rldcmp ==? 4'b10x1; //01x0;
+		PPHLD   <= rldcmp ==? 4'b101X; //010x;
+		OFFLD   <= rldcmp ==? 4'b111X; //000x;
+		WLATLDF <= rldcmp ==? 4'b110X; //001x;
+		DLILDF  <= rldcmp ==? 4'b1110; //0001;
+		WLD1F   <= rldcmp ==? 4'b1100; //0011;
+
+		DSEL <= data_en;
+
+		PLA0    <= ~(dmas ==? 48'b000xxx0x0x0x0x00xx0000xxx00xx0x0x00xxx0x0x0xxxxx);
+		PLA1    <= ~(dmas ==? 48'bxxx0000xx00xx000xxxxxx00000xxx00xxx0000xx00xxxxx);
+		PLA2    <= ~(dmas ==? 48'bxxxxxxx0000xxxxx00000000000xxxxx00xxxxx0000xxxxx);
+		PLA3    <= ~(dmas ==? 48'b00000000000xxxxxxxxxxxxxxxx0000000xxxxxxxxx00000);
+		PLA4    <= ~(dmas ==? 48'bxxxxxxxxxxx00000000000000000000000xxxxxxxxxxxxxx);
+		ABENF   <= ~(dmas ==? 48'b000xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx0xx00);
+		ELRWA   <= ~(dmas ==? 48'bxxxxx0xxxxxxxxxxxxxxxxxxx00xxxxxx0xxxxxxxxxxxxxx);
+		ALATCON <= ~(dmas ==? 48'bxxx000x0x0x0x0xx00xxxxx0x00xxx0xx0x000x0x0xxxxxx);
+		data_en <= ~(dmas ==? 48'b000xxxx0x0x0x0xxxxxxxxxxxxxxx0xxxxxxxxx0x0x0x000);
+		INTENBL <= ~(dmas ==? 48'bxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx0xxxxx);
+		ASEL    <= ~(dmas ==? 48'bxxxxxxxxxxxxxxxxx0xxxxxxxx0xxx0xx00xxxxxxxxxxxxx);
+		RLD0    <= ~(dmas ==? 48'bxxxxxx000x0x000000xxxxxx00000xxxxxxxxxxxx0xx0xxx);
+		XEN0    <= ~(dmas ==? 48'bxxx00xxxxxxxxx000000xx00000xxx00x0xxxxxxxxxxxxxx);
+		RLD1    <= ~(dmas ==? 48'bxxxxxx0x0x000x00xxxxxxxx0xx000xx0xxxxxx0x0xx00xx);
+		XEN1    <= ~(dmas ==? 48'bxxxxx0x0x0x0x0xx0000xxxxx00xxx00x0x00xxxxxxxxxxx);
+		RDL2    <= ~(dmas ==? 48'bxxxxxxxxx0xxx0xx00xxxxxxx00xxxxxxxxxxx00000x00xx);
+		XEN2    <= ~(dmas ==? 48'bxxx000x0x0x0x0xx0000xxxxx00xxxxxxxxxx0x0x0xxxxxx); //???
+		RLD3    <= ~(dmas ==? 48'bxxxxxxx0x0x0x0xx00xxxxxx00000xxxxxxxxxx0xxxx0xxx);
+		LRICLD  <= ~(dmas ==? 48'bxxxxxxxxxxxxxxxxxx0xxxxxxxx0xxxxxxxxxxxxxxxxxxxx);
+		HALTRST <= ~(dmas ==? 48'bxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx00000);
+	end
+
+	if (lrc) begin
+		RSS1 <= 1;
+		RSS0 <= 1;
+	end
+end
+
+// XEN:
+// 0 Hold value
+// 1 Write color byte
+// 2 ZP Reload
+// 3 Char Byte
+// 4 ZP Enable
+// 5 DP Reload
+// 6 DP Enable
+// 7 PP Enable
+
+// RLD:
+// 0: pp address assert
+
+// 2: zp byte 2
+// 3: dma byte 1
+
+// 5: theend// 5: dma byte 2
+// 6: zone end 3
+// 7: zone end 1
+
+// 9:dma byte 0
+
+// 11: dma byte 3// 11: dma byte 4 pp address?
+// 12: nothing/incpp?
+// 13: pp byte write?
+// 14: zone end 2
+// 15: unhalt
+
+// 4/5: DPPH LD
+// 4/5: DPPL LD
+// 6: DPRL LD
+// 7: DPRH LD
+// 3: DPL LD
+// 9/11: PPL LD
+// 11/12: PPH LD
+// 14/15: OFF LD
+
+// 12/13: WLATLDF
+// 14: DLILDF
+// 12: WLD1F
 
 endmodule // dma_ctrl

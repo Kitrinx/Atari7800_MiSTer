@@ -105,7 +105,9 @@ end
 
 always @(posedge clk) if(cen && zero) begin : counter
     last_load <= load;
-    if( (load && !last_load) || overflow ) begin
+    if ( rst )
+        cnt <= 0;
+    else if( (load && !last_load) || overflow ) begin
       cnt  <= start_value;
     end
     else if( last_load ) cnt <= next;

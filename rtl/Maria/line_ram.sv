@@ -28,7 +28,8 @@ module line_ram(
 	// VGA Control signal
 	input  logic [8:0]         LRAM_OUT_COL,
 	input  logic               mclk0,
-	input  logic               mclk1
+	input  logic               mclk1,
+	input  logic               cram_write
 );
 
 // The behavior of these make them work poorly in bram.
@@ -53,7 +54,9 @@ always @(posedge clk_sys) begin
 		else
 			playback_ix <= 0;
 	end
-	if (mclk0) begin
+	// The color ram will be delayed by one if there's a cram write
+	// Uncomment to enable this bug (it's ugly)
+	if (mclk0 /*&& ~cram_write*/) begin
 		if (playback_color == 2'b0 || border) begin
 			PLAYBACK <= (border & ~BORDER_CONTROL) ? 8'd0 : COLOR_MAP[0];
 		end else begin

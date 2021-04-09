@@ -113,7 +113,7 @@ module Atari7800(
 
 	// Track the open bus since FPGA's don't use bidirectional logic internally
 	always_ff @(posedge clk_sys) begin
-		open_bus <= ~RW ? write_DB : read_DB;
+		open_bus <= maria_AB_out ? 8'd0 :(~RW ? write_DB : read_DB);
 		last_address <= AB;
 	end
 
@@ -125,7 +125,7 @@ module Atari7800(
 		if (cs_ram1)  read_DB = ram1_DB_out;
 		if (cs_tia)   read_DB = {tia_DB_out[7:6], open_bus[5:0]};
 		if (cs_riot)  read_DB = riot_DB_out;
-		if (cs_cart)  read_DB = (~bios_en_b && AB[15] ? bios_out : cart_DB_out);
+		if (cs_cart)  read_DB = (~bios_en_b && AB[15]) ? bios_out : cart_DB_out;
 		if (cs_maria) read_DB = maria_DB_out;
 
 		case ({~cpu_released, maria_drive_AB})
@@ -208,7 +208,7 @@ module Atari7800(
 	TIA2 tia_inst
 	(
 		.clk            (clk_sys),
-		.ce             (mclk0),     // Clock enable for CLK generation only
+		.ce             (mclk1),     // Clock enable for CLK generation only
 		.phi0           (),
 		.phi2           (pclk0),
 		.RW_n           (RW),
@@ -461,10 +461,8 @@ module M6502C
 	output        is_halted  // This is used to indicate that sally has released the bus
 );
 
-	assign is_halted = ~(cpu_halt_n);
-
-	logic cpu_halt_n = 0;
-
+	logic cpu_halt_n = 1;
+	
 	T65 cpu (
 		.mode (0),
 		.BCD_en(1),
@@ -483,7 +481,9 @@ module M6502C
 	);
 
 	always @(posedge clk_sys) begin
+		is_halted <= ~cpu_halt_n;
 		if (reset) begin
+			is_halted <= 0;
 			cpu_halt_n <= 1;
 		end else if (pclk1) begin
 			cpu_halt_n <= halt_n;

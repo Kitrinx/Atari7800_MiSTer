@@ -29,3 +29,4 @@ Some games use the [difficulty switches](https://atariage.com/forums/topic/23591
 - Osman Celimli for his DMA timing traces and experience.
 - Robert Tuccitto for the extensive palette information.
 - Remowilliams for testing a zillion games for me on real hardware.
+- Alan Steremberg for getting access to valuable documentation.

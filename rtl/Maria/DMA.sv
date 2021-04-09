@@ -25,16 +25,17 @@ module dma(
 	input  logic [7:0]  d_in,
 	input  logic [1:0]  DM,
 
+	output logic        noslow,
 	output logic        latch_hpos,
 	output logic        HALT,
-	output logic [7:0]  HPOS,
 	output logic        DLI,
 	output logic        WM,
 	output logic [2:0]  PAL,
 	output logic [15:0] AB,
-	output logic        drive_AB,
+	output logic        ABEN,
 	output logic        latch_byte,
-	output logic        nmi_n
+	output logic        nmi_n,
+	output logic   [14:0] sel_out
 );
 
 // 4 Byte Header format:
@@ -113,7 +114,7 @@ logic ELRWA;    // Instructs line ram to latch the incoming data bus as a new ce
 logic ALATCON;  // Address Latch On? means to latch the address currently selected by XEN
 logic DSEL;     // Data Select. This signal means to write the data bus to register selected by the "reload" selection.
 logic INTENBL;  // Occurs on last byte of zone ends. If the DLI bit has been recorded, this signal enables the DLI signal.
-logic ASEL;     // Unusure, Possibly "add offset to selected address."
+logic ASEL;     // Adds OFFSET to the currently selected address for latching
 logic RLD0;     // "Reload" selector lines
 logic RLD1;     // "Reload" selector lines
 logic RDL2;     // "Reload" selector lines
@@ -141,7 +142,7 @@ logic DLILDF;   // DLI Bit load (also holey)
 logic WLD1F;    // Header byte 1 load
 
 // "Enable" outcomes (Value 0 has no outcome). This instructs Maria to put the selected register
-// onto the internal bus. If ALATCON is selected, the internal bus is latched to the address bus 
+// onto the internal bus. If ALATCON is selected, the internal bus is latched to the address bus
 // until the next ALATCON overwrites it. If ASEL is high, OFFSET is added to the internal bus
 // before being placed on the address bus.
 logic DPPREN;   // Present base Zone Address and reload pointer
@@ -169,11 +170,9 @@ logic holey;
 // Halt takes 1 phi1 tick to start, so ultimately it takes 2 cpu cycles to
 // start up.
 // Halt is actually asserted on the falling edge of vblank, or the rising edge of
-// (vblank & hblank), effectively making it happen at the end of every visible line.
+// hblank, effectively making it happen at the end of every visible line.
 // If DMA is disabled, halt is held in a continously reset state, so even
 // though the blanks attempt to assert it, it fails because of HALTRST.
-
-assign cond = {pclk1, HALT, DLI, |sel_last[5:1], |sel_last[2:1]};
 
 assign sel[6] = cond ==? 5'b1xx11; // 0xx00
 assign sel[5] = cond ==? 5'b11x00; // 00x11
@@ -183,15 +182,34 @@ assign sel[2] = cond ==? 5'b10110; // 01001
 assign sel[1] = cond ==? 5'b0xx11; // 1xx00
 assign sel[0] = cond ==? 5'b1xx00; // 0xx11
 
+assign latch_hpos = LRICLD;
+
+always_comb begin
+	selected_address = '0;
+	case (XEN)
+		3'b010: selected_address = ZP;
+		3'b011: selected_address = CHR_PTR;
+		3'b100: selected_address = ZONE_PTR;
+		3'b101: selected_address = DL;
+		3'b110: selected_address = DL_PTR;
+		3'b111: selected_address = PIX_PTR;
+		3'b001: selected_address = WIDTH;
+		default: ;
+	endcase
+	incremented_address = selected_address + (add_sel ? {OFFSET, 8'd0} : 16'd0);
+end
+logic old_pclk1;
+logic [3:0] start_sr;
+logic sel_5;
+logic old_halt;
+
 // Here we have the DMA state machine. It consists of a 48 part condition check, and then
-// produces results for several signals using wide NORs. The POS latches serve as a 5
+// produces results for several signals using wide NORs. The PLA latches serve as a 5
 // bit state variable to tell this mechanism what phase of operation it is in. The major
 // start and stop conditions are the two RSS signals discussed above.
-
 // NOTE: The indexing of this is the opposite of the schematic for comparison purposes
-wire [13:0] cond2 = {PLA0, PLA1, PLA2, PLA3, PLA4, char_width, DM[1], DM[0], LONGHDR,
-	IND, ~|OFFSET, ~|WIDTH, ~RSS1, ~RSS0};
-
+logic [13:0] cond2;
+// Input gated by phi2
 assign dmas[47] = cond2 ==? 14'b10010x10xxxx00;
 assign dmas[46] = cond2 ==? 14'b10010x10xxxx11;
 assign dmas[45] = cond2 ==? 14'b00010x10xxxxxx;
@@ -241,40 +259,66 @@ assign dmas[2 ] = cond2 ==? 14'b11100xxxxxxxxx;
 assign dmas[1 ] = cond2 ==? 14'b00010x11xxxxxx;
 assign dmas[0 ] = cond2 ==? 14'b00010x0xxxxxxx;
 
-assign latch_hpos = LRICLD;
+logic [2:0] end_sr;
+logic lrc_1, hbs_1, hbs_2, vbe_1, vbe_2;
+logic sel5_1, sel5_2;
+logic old_s5_trig;
+logic sel_5_trig;
+logic [2:0] sel5_cnt;
+logic haltrst_1;
 
-always_comb begin
-	selected_address = '0;
-	case (XEN)
-		3'b010: selected_address = ZP;
-		3'b011: selected_address = CHR_PTR;
-		3'b100: selected_address = ZONE_PTR;
-		3'b101: selected_address = DL;
-		3'b110: selected_address = DL_PTR;
-		3'b111: selected_address = PIX_PTR;
-		3'b001: selected_address = WIDTH;
-		default: ;
-	endcase
-	incremented_address = selected_address + (add_sel ? {OFFSET, 8'd0} : 16'd0);
-end
+assign sel_5_trig = start_sr[0] && pclk1;
+assign sel_5 = sel5_cnt == 1'd1;
 
-logic [3:0] start_sr;
-wire sel_5 = start_sr[0] && pclk1;
-logic old_halt;
+assign sel_out = sel_last;
+assign ABEN = ~ABENF; // Gated by phi1
 
-always_ff @(posedge clk_sys) begin 
+always_ff @(posedge clk_sys) begin
+	old_pclk1 <= pclk1;
 	if (pclk1) begin
+		end_sr <= {end_sr[1:0], old_halt && ~HALT};
 		start_sr <= {start_sr[2:0], ~old_halt && HALT};
 		old_halt <= HALT;
+		if (~old_halt && HALT) begin
+			sel5_cnt <= 3'd4;
+			noslow <= 1;
+		end else if (old_halt && ~HALT) begin
+			noslow <= 0;
+		end
 	end
-	if (mclk1) begin
-		data_en <= DSEL;
-		drive_AB <= ~ABENF;
-		XEN <= {XEN2, XEN1, XEN0};
-		addr_latch <= ALATCON;
-		add_sel <= ASEL;
-		latch_byte <= ELRWA && ~holey;
+	if (mclk0) begin
+		if (sel5_cnt)
+			sel5_cnt <= sel5_cnt - 1'd1;
+		old_s5_trig <= sel_5_trig;
+		sel_last <= sel;
+		// if (sel[6]) begin
+		// 	nmi_n <= 0;
+		// 	nmi_set <= 1;
+		// end
+		// if (sel[0]) begin
+		// 	if (nmi_set) // Extend the NMI one extra tick so the 6502 sees it.
+		// 		nmi_set <= 0;
+		// 	else
+		// 		nmi_n <= 1;
+		// end
+		nmi_n <= ~(|end_sr[2:1] && DLI);
+		sel5_2 <= sel5_1;
 
+	end else if (mclk1) begin
+		sel5_1 <= sel_last[5];
+		cond <= {pclk1 || old_pclk1, vbe_halt || hbs_halt, DLI, |sel_last[5:1], |sel_last[2:1]}; // gated by phi1
+	end
+
+	if (mclk1) begin
+		data_en <= DSEL; // Gated by phi2, then phi1
+		XEN <= {XEN2, XEN1, XEN0}; // Gated by phi2, then phi1
+		addr_latch <= ALATCON; // gated by phi2, then phi1
+		add_sel <= ASEL; // Gated by phi2, then phi1
+		latch_byte <= ELRWA && ~holey; // gated by phi2, then phi1
+		HALT <= vbe_halt || hbs_halt; // gated by phi1
+		haltrst_1 <= HALTRST; // FIXME: added an extra cycle, not in schematic
+
+		// Gated by phi2, then phi1
 		TLD     <= rldcmp ==? 4'b0010;
 		DPPHLD  <= rldcmp ==? 4'b010X;
 		DPPLLD  <= rldcmp ==? 4'b010X;
@@ -289,6 +333,7 @@ always_ff @(posedge clk_sys) begin
 		DLILDF  <= rldcmp ==? 4'b1110;
 		WLD1F   <= rldcmp ==? 4'b1100;
 
+		// Outputs on phi1
 		PLA0    <= ~(dmas ==? 48'b000xxx0x0x0x0x00xx0000xxx00xx0x0x00xxx0x0x0xxxxx);
 		PLA1    <= ~(dmas ==? 48'bxxx0000xx00xx000xxxxxx00000xxx00xxx0000xx00xxxxx);
 		PLA2    <= ~(dmas ==? 48'bxxxxxxx0000xxxxx00000000000xxxxx00xxxxx0000xxxxx);
@@ -314,29 +359,50 @@ always_ff @(posedge clk_sys) begin
 			AB <= incremented_address;
 
 		if (add_sel) begin
-			if (((incremented_address[11] & A11en) || (incremented_address[12] & A12en)) 
+			if (((incremented_address[11] & A11en) || (incremented_address[12] & A12en))
 				&& incremented_address[15]) begin
 				holey <= 1;
 				WIDTH <= 0;
 			end
 		end
 
-		HALT <= vbe_halt || hbs_halt;
+		RSS0 <= (hbs_halt && sel_5); // gated by phi1
+		RSS1 <= (vbe_halt && sel_5);
 
-		if (HALTRST) begin
-			vbe_halt <= 0;
-			hbs_halt <= 0;
+		if (lrc) begin // gated by phi2, then phi1
+			RSS1 <= 1;
+			RSS0 <= 1;
 		end
+
+
+		lrc_1 <= lrc;
+		hbs_1 <= hbs;
+		hbs_2 <= hbs_1;
+		vbe_1 <= vbe;
+		vbe_2 <= vbe_1;
+
 	end else if (mclk0) begin
+		// gated at phi2
+		cond2[1:0] <= {~RSS1, ~RSS0};
+		cond2[3:2] <= {~|OFFSET, ~|WIDTH};
+		cond2[13:4] <= {PLA0, PLA1, PLA2, PLA3, PLA4, char_width, DM[1:0], LONGHDR, IND};
+
 		if (DLI_flag && INTENBL)
 			DLI <= 1;
 
-		RSS0 <= (hbs_halt && sel_5);
-		RSS1 <= (vbe_halt && sel_5);
+		// gated by phi2
+		if (hbs && ~vbe && ~haltrst_1) begin // This starts on the rising edge of "blank" which stays true if either blank is true.
+			if (~vblank)
+				hbs_halt <= 1;
+		end
 
-		if (lrc) begin
-			RSS1 <= 1;
-			RSS0 <= 1;
+		// gated by phi2
+		if (vbe && ~haltrst_1)
+			vbe_halt <= 1;
+
+		if (haltrst_1) begin // Gated by phi2
+			vbe_halt <= 0;
+			hbs_halt <= 0;
 		end
 
 		if (sel_5 && hbs_halt) begin
@@ -344,37 +410,13 @@ always_ff @(posedge clk_sys) begin
 			DLI_flag <= 0;
 		end
 
-		if (hbs && ~HALTRST) begin // This starts on the rising edge of "blank" which stays true if either blank is true.
-			if (~vblank)
-				hbs_halt <= 1;
-		end
-
-		if (vbe && ~HALTRST)
-			vbe_halt <= 1;
-
-		if (LRICLD)
-			HPOS <= d_in;
-
-		if (sel[6]) begin
-			nmi_n <= 0;
-			nmi_set <= 1;
-		end
-		if (sel[0]) begin
-			if (nmi_set) // Extend the NMI one extra tick so the 6502 sees it.
-				nmi_set <= 0;
-			else
-				nmi_n <= 1;
-		end
-
-		sel_last <= sel;
-
 		case (XEN)
 			3'b010: ZONE_PTR <= ZP;
 			3'b101: DL_PTR <= DL;
 			default: ;
 		endcase
 
-		// Reloads
+		// Reloads: All these pretty much happen on phi2, gated by the RLD line PLA
 		if (TLD) begin
 			if (data_en)
 				CHR_PTR <= {char_base, d_in};
@@ -466,27 +508,34 @@ always_ff @(posedge clk_sys) begin
 		OFFSET <= bypass_bios ? 4'hA : 4'd0;
 		CHR_PTR <= 0;
 		PIX_PTR <= 0;
+		WIDTH <= 0;
+		//dmas <= 48'h400000000000;
 		WM <= 0;
 		DLI <= 0;
 		RSS0 <= 0;
 		RSS1 <= 0;
-		{PLA0, PLA1, PLA2, PLA4, ABENF, ELRWA, ALATCON, DSEL, INTENBL,
+		{PLA1, PLA2, PLA4, ELRWA, ALATCON, DSEL, INTENBL,
 		ASEL, RLD0, XEN0, RLD1, XEN1, RDL2, XEN2, RLD3, LRICLD, HALTRST} <= '0;
 		{TLD, DPPHLD, DPPLLD, DPRLLD, DPRHLD, DPHLD, DPLLD, PPLLD, PPHLD, OFFLD,
 		WLATLDF, DLILDF, WLD1F} <= '0;
-		PLA3 <= 1;
+		PLA3 <= bypass_bios ? 1'b1 : 1'b0;
+		PLA0 <= bypass_bios ? 1'b1 : 1'b0; // 0x8 after reset init
 		AB <= 0;
 		HALT <= 0;
-		HPOS <= 0;
 		PAL <= 0;
+		haltrst_1 <= 0;
 		XEN <= 0;
+		ABENF <= 1;
+		//ABEN <= 0;
+		cond2[13:4] <= bypass_bios ? 10'b1001001100 : '0;
+		cond2[1:0] <= bypass_bios ? 2'b11 : '0; // 0x05f7 after reset init
 		DLI_flag <= 0;
 		add_sel <= 0;
+		cond <= 0;
 		data_en <= 0;
 		holey <= 0;
 		latch_byte <= 0;
 		addr_latch <= 0;
-		drive_AB <= 0;
 		data_en <= 0;
 		A12en <= 0;
 		A11en <= 0;

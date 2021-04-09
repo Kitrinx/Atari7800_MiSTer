@@ -56,12 +56,13 @@ logic [2:0] bank_type; // 00 = Supergame, 01 = Activision, 02 = none 03 = absolu
 logic [31:0] address_offset;
 logic [2:0] cart_cs_reg, cart_cs_reg_m;
 logic [7:0] bank_mask;
-logic [13:0] ram_mask;
+logic [16:0] ram_mask;
 logic [7:0] XCTRL1, XCTRL2, XCTRL3, XCTRL4, XCTRL5; // 2-5 currently unused
 logic souper_ram_cs;
 logic [24:0] souper_addr;
 wire souper_en = cart_flags[12];
 logic [11:0] souper_bank;
+logic [2:0] ram_bank;
 logic souper_wr;
 logic pokey_irq_n, ym_irq_n;
 
@@ -149,9 +150,8 @@ always_ff @(posedge clk_sys) if (pclk1) begin
 		hardware_map[2] <= 3'd3;
 		hardware_map[3] <= 3'd3;
 	end else if (cart_flags[5]) begin // Supergame 8kb RAM at $6k
+		hardware_map[2] <= 3'd3;
 		hardware_map[3] <= 3'd3;
-		hardware_map[4] <= 3'd3;
-		ram_mask[13] <= 0;
 	end else if (cart_flags[7]) begin // Mirror RAM at $4k
 		hardware_map[2] <= 3'd3;
 		hardware_map[3] <= 3'd3;
@@ -234,30 +234,55 @@ end
 
 logic [7:0] covox_reg[4];
 
-assign covox_r = {{1'b0, covox_reg[0]} + covox_reg[1], 7'd0};
-assign covox_l = {{1'b0, covox_reg[2]} + covox_reg[3], 7'd0};
+// FIXME: this could possibly overflow, but the output is too relatively quiet without it.
+// Possibly if it becomes an issue add a compressor.
+logic [1:0] channels_used;
+always_comb begin
+	covox_r = {covox_reg[0], 8'd0};
+	covox_l = {covox_reg[0], 8'd0};;
+	case (channels_used)
+
+		2'd1: begin
+			covox_r = {covox_reg[0], 8'd0};
+			covox_l = {covox_reg[1], 8'd0};
+		end
+		2'd2, 2'd3: begin
+			covox_r = {{1'b0, covox_reg[0]} + covox_reg[2], 7'd0};
+			covox_l = {{1'b0, covox_reg[1]} + covox_reg[3], 7'd0};
+		end
+		default:;
+	endcase
+end
 
 always_ff @(posedge clk_sys) begin
 	if (reset) begin
 		bank_reg <= 8'd0;
+		ram_bank <= 3'd0;
 		covox_reg <= '{8'd0, 8'd0, 8'd0, 8'd0};
+		channels_used <= 0;
 	end else if (~rw & cart_cs & pclk0) begin
 		if (is_covox) begin
+			channels_used <= channels_used | address_in[1:0];
 			covox_reg[address_in[1:0]] <= din;
 		end
-		if (bank_type == 3'd0 && address_in[15:14] == 2'b10) //supergame bank
-			bank_reg <= din;
-		else if (bank_type == 3'd1 && (address_in[15:4]) == 12'hFF8) // activision bank
+		if (bank_type == 3'd0 && address_in[15:14] == 2'b10) begin//supergame bank
+			if (cart_flags[5]) begin
+				ram_bank <= din[7:5];
+				bank_reg <= din[4:0];
+			end else begin
+				bank_reg <= din;
+			end
+		end else if (bank_type == 3'd1 && (address_in[15:4]) == 12'hFF8) // activision bank
 			bank_reg <= address_in[3:0];
 		else if (bank_type == 3'd3 && address_in[15]) // Absolute
 			bank_reg <= din[1:0];
 	end
 end
 
-spram #(.addr_width(15)) cart_ram
+spram #(.addr_width(17)) cart_ram
 (
 	.clock   (clk_sys),
-	.address (souper_en ? souper_addr : (address_in[13:0] & ram_mask)),
+	.address (souper_en ? souper_addr : ({ram_bank, address_in[13:0]} & ram_mask)),
 	.data    (din),
 	.wren    ((ram_cs || (~souper_ram_cs && souper_en)) && ~rw && pclk0),
 	.q       (ram_dout),

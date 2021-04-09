@@ -17,8 +17,8 @@ module maria(
 
 	// Clocking
 	input logic         reset,
-	input logic         clk_sys, 
-	output logic        mclk0,
+	input logic         clk_sys,
+	output logic        mclk0,     // This serves as tia_clk
 	output logic        mclk1,
 	output logic        pclk0,
 	output logic        pclk1,
@@ -32,7 +32,7 @@ module maria(
 	output logic        cs_maria,
 
 	// Maria configuration
-	input logic         RW, 
+	input logic         RW,
 	input logic         maria_en,
 
 	// Video
@@ -89,10 +89,9 @@ module maria(
 	logic [1:0]       zp_written;
 	logic [7:0]       UV_out;
 	logic [2:0]       clock_div;
-	logic [7:0]       hpos;
 	logic [1:0]       edge_counter;
 	logic [7:0]       pal_counter;
-	logic             deassert_ready;	
+	logic             wsync;
 	logic             border;
 	logic             prst;
 	logic             vbe;
@@ -111,19 +110,32 @@ module maria(
 	logic             NMI_ung_n;
 	logic             slow_clk_latch;
 	logic             ready_int;
+	logic             cram_sel;
+	logic             ABEN;
+	logic             old_halt;
+	logic             old_ready;
+	logic             old_men;
+	logic [3:0]       men_count;
+	logic             noslow;
 
 	// Apply color kill if needed
 	assign YC = UV_out & (ctrl[7] ? 8'h0F : 8'hFF);
+	assign drive_AB = ABEN && maria_en;
 
 	// Maria being enabled is a condition for NMI
 	assign NMI_n = NMI_ung_n || ~maria_en;
+	assign halt_n = ~pclk_toggle ? ~halt_en : old_halt;
+	assign ready = ~pclk_toggle ? (lrc || ready_int) : old_ready;
+	
+
 
 	always @(posedge clk_sys) begin
 		if (reset) begin
-			ready <= 1;
-			clock_div <= 0;
+			clock_div <= bypass_bios ? 2'd1 : 2'd2;
 			clk_toggle <= 0;
-			pclk_toggle <= 0;
+			pclk_toggle <= bypass_bios ? 1'd1: 1'd0;
+			old_ready = 1;
+			old_halt = 1;
 			pal_counter <= 0;
 			mclk1 <= 0;
 			mclk0 <= 0;
@@ -132,13 +144,23 @@ module maria(
 			ready_int <= 1;
 			slow_clk_latch <= 0;
 		end else begin
-			if (PAL)
-				pal_counter <= pal_counter + 1'd1;
-			else
-				pal_counter <= 0;
+			// if (PAL)
+			// 	pal_counter <= pal_counter + 1'd1;
+			// else
+			// 	pal_counter <= 0;
 
 			mclk1 <= 0;
 			mclk0 <= 0;
+			old_men <= maria_en;
+			
+			// If maria enabled rises, the CPU clock is held in a state
+			// of reset for 5 master oscillator cycles.
+			if (~old_men && maria_en) begin
+				men_count <= 5;
+			end
+			
+			if (|men_count)
+				men_count <= men_count - 1'd1;
 
 			if (pal_counter == 109) begin
 				pal_counter <= 0;
@@ -150,23 +172,26 @@ module maria(
 				clk_toggle <= ~clk_toggle;
 			end
 
-			if (deassert_ready)
+			if (wsync)
 				ready_int <= 1'b0;
-			else if (lrc)
+			else
+
+			if (lrc) begin
 				ready_int <= 1'b1;
+			end
 
 			pclk0 <= 0;
 			pclk1 <= 0;
 
 			if (pclk_toggle)
 				slow_clk_latch <= sel_slow_clock;
-			
+
 			if (~pclk_toggle) begin
-				ready <= ready_int;
-				halt_n <= ~halt_en;
+				old_ready <= ready_int;
+				old_halt <= ~halt_en;
 			end
 
-			if (mclk1) begin
+			if (mclk0) begin
 				if (clock_div)
 					clock_div <= clock_div - 1'd1;
 				else begin
@@ -175,6 +200,10 @@ module maria(
 					pclk0 <= ~pclk_toggle;
 					clock_div <= (~pclk_toggle ? sel_slow_clock : slow_clk_latch) ? 3'd2 : 2'd1;
 				end
+			end
+			if (|men_count) begin
+				pclk_toggle <= 0;
+				clock_div <= sel_slow_clock ? 3'd2 : 2'd1;
 			end
 		end
 	end
@@ -196,14 +225,17 @@ module maria(
 		.KANGAROO_MODE   (ctrl[2]),
 		.BORDER_CONTROL  (ctrl[3]),
 		.COLOR_KILL      (ctrl[7]),
-		.lrc             (lrc)
+		.lrc             (lrc),
+		.cram_write      (cram_sel)
 	);
 
 	control control_inst (
 		.mclk0           (mclk0),
 		.mclk1           (mclk1),
+		.pclkp           (pclk_toggle),
 		.maria_en        (maria_en),
 		.AB              (AB_in),
+		.ABEN            (drive_AB),
 		.DB_in           (write_DB_in),
 		.DB_out          (DB_out),
 		.RW              (RW),
@@ -211,11 +243,12 @@ module maria(
 		.ctrl            (ctrl),
 		.color_map       (color_map),
 		.status_read     ({vblank, 7'b0}),
+		.noslow          (noslow),
 		.char_base       (char_base),
 		.ZP              (ZP),
 		.pal             (PAL),
 		.sel_slow_clock  (sel_slow_clock),
-		.deassert_ready  (deassert_ready),
+		.wsync           (wsync),
 		.clk_sys         (clk_sys),
 		.reset           (reset),
 		.pclk0           (pclk2),
@@ -224,12 +257,13 @@ module maria(
 		.cs_ram1         (cs_ram1),
 		.cs_riot         (cs_riot),
 		.cs_tia          (cs_tia),
-		.cs_maria        (cs_maria)
+		.cs_maria        (cs_maria),
+		.cram_select     (cram_sel)
 	);
 
 	dma dma_inst (
 		.clk_sys         (clk_sys),
-		.reset           (reset || ~maria_en),
+		.reset           (reset),
 		.mclk0           (mclk0),
 		.mclk1           (mclk1),
 		.vblank          (vblank),
@@ -240,22 +274,22 @@ module maria(
 		.pclk0           (pclk0),
 		.DM              (ctrl[6:5]),
 		.AB              (AB_out),
-		.drive_AB        (drive_AB),
+		.ABEN            (ABEN),
 		.latch_byte      (latch_byte),
 		.d_in            (d_in),
 		.latch_hpos      (latch_hpos),
 		.HALT            (halt_en),
-		.HPOS            (hpos),
 		.DLI             (DLI_en),
 		.WM              (wm),
 		.PAL             (palette),
+		.noslow          (noslow),
 		.ZP              (ZP),
-		.char_width (ctrl[4]),
+		.char_width      (ctrl[4]),
 		.char_base       (char_base),
 		.bypass_bios     (bypass_bios),
 		.nmi_n           (NMI_ung_n)
-	);
-	
+		);
+
 	video_sync sync_inst (
 		.mclk0           (mclk0),
 		.mclk1           (mclk1),

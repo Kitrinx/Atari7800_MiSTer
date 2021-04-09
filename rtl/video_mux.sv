@@ -52,6 +52,7 @@ logic [23:0] out_color, nwarm_color, ncool_color, nhot_color,
 wire pix_ce_immediate = is_maria ? maria_pix_ce : tia_pix_ce;
 logic pix_ce_delayed;
 logic [7:0] yuv_index;
+logic [7:0][1:0] last_color;
 
 always_comb begin
 	out_color = nwarm_color;
@@ -69,12 +70,18 @@ always_comb begin
 		6: out_color = phot_color;
 	 default: ;
 	endcase
+
 end
+
+// wire signed [6:0] old_diff = $signed{1'b0, last_color[0][3:0]} - $signed{1'b0, last_color[1][3:0]};
+// wire signed [6:0] new_diff = $signed{1'b0, last_color[0][3:0]} - $signed{1'b0, yuv_index[3:0]};
+// wire signed [6:0] old_abs = 
 
 always @(posedge clk_sys) begin
 	pix_ce_delayed <= pix_ce_immediate;
 	pix_ce <= pix_ce_delayed;
 	if (pix_ce_delayed) begin
+		last_color <= {last_color[0], yuv_index};
 		{red, green, blue} <= out_color;
 		vsync <= is_maria ? maria_vsync : tia_vsync;
 		vblank <= is_maria ? maria_vblank : tia_vblank;
@@ -157,3 +164,21 @@ spram #(
 );
 
 endmodule
+
+//     red   gree  blue
+// 0 | 4'h7, 4'h5, 4'h0
+// 1 | 4'h5, 4'h6, 4'h0 // yellow-ish
+// 2 | 4'h3, 4'h7, 4'h0 // green-ish
+// 3 | 4'h2, 4'h8, 4'h1 // green peak
+// 4 | 4'h1, 4'h7, 4'h3
+// 5 | 4'h1, 4'h7, 4'h7
+// 6 | 4'h2, 4'h6, 4'ha
+// 7 | 4'h3, 4'h5, 4'hc 
+// 8 | 4'h5, 4'h4, 4'hc // blue peak?
+// 9 | 4'h7, 4'h3, 4'hc // magenta-ish
+// a | 4'h8, 4'h3, 4'ha 
+// b | 4'h9, 4'h3, 4'h7 
+// c | 4'h9, 4'h3, 4'h4 // red peak
+// d | 4'h8, 4'h4, 4'h1 
+// e | 4'h7, 4'h5, 4'h0
+// f | 4'h5, 4'h5, 4'h5

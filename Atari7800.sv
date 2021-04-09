@@ -1,3 +1,4 @@
+`default_nettype none
 // k7800 (c) by Jamie Blanks
 
 // k7800 is licensed under a
@@ -43,7 +44,7 @@ module emu
 	input  [11:0] HDMI_WIDTH,
 	input  [11:0] HDMI_HEIGHT,
 
-`ifdef USE_FB
+`ifdef MISTER_FB
 	// Use framebuffer in DDRAM (USE_FB=1 in qsf)
 	// FB_FORMAT:
 	//    [2:0] : 011=8bpp(palette) 100=16bpp 101=24bpp 110=32bpp
@@ -61,6 +62,7 @@ module emu
 	input         FB_LL,
 	output        FB_FORCE_BLANK,
 
+`ifdef MISTER_FB_PALETTE
 	// Palette control for 8bit modes.
 	// Ignored for other video modes.
 	output        FB_PAL_CLK,
@@ -68,6 +70,7 @@ module emu
 	output [23:0] FB_PAL_DOUT,
 	input  [23:0] FB_PAL_DIN,
 	output        FB_PAL_WR,
+`endif
 `endif
 
 	output        LED_USER,  // 1 - ON, 0 - OFF.
@@ -99,7 +102,6 @@ module emu
 	output        SD_CS,
 	input         SD_CD,
 
-`ifdef USE_DDRAM
 	//High latency DDR3 RAM interface
 	//Use for non-critical time purposes
 	output        DDRAM_CLK,
@@ -112,9 +114,7 @@ module emu
 	output [63:0] DDRAM_DIN,
 	output  [7:0] DDRAM_BE,
 	output        DDRAM_WE,
-`endif
 
-`ifdef USE_SDRAM
 	//SDRAM interface with lower latency
 	output        SDRAM_CLK,
 	output        SDRAM_CKE,
@@ -127,10 +127,10 @@ module emu
 	output        SDRAM_nCAS,
 	output        SDRAM_nRAS,
 	output        SDRAM_nWE,
-`endif
 
-`ifdef DUAL_SDRAM
+`ifdef MISTER_DUAL_SDRAM
 	//Secondary SDRAM
+	//Set all output SDRAM_* signals to Z ASAP if SDRAM2_EN is 0
 	input         SDRAM2_EN,
 	output        SDRAM2_CLK,
 	output [12:0] SDRAM2_A,
@@ -222,7 +222,7 @@ reg old_cart_download;
 `include "build_id.v"
 parameter CONF_STR = {
 	"ATARI7800;;",
-	"FS1,A78A26;",
+	"FS1,A78;",
 	"FC2,ROMBIN,Load BIOS;",
 	"-;",
 	"OFG,Region,Auto,NTSC,PAL;",
@@ -481,13 +481,13 @@ logic [14:0] bios_mask;
 
 detect2600 detect2600
 (
-	.clk(clk_sys),
-	.addr(ioctl_addr[12:0]),
-	.cart_size(cart_size),
-	.enable(ioctl_wr & cart_download),
-	.data(ioctl_dout),
-	.force_bs(force_bs),
-	.sc(sc)
+	.clk        (clk_sys),
+	.addr       (ioctl_addr[12:0]),
+	.cart_size  (cart_size),
+	.enable     (ioctl_wr & cart_download),
+	.data       (ioctl_dout),
+	.force_bs   (force_bs),
+	.sc         (sc)
 );
 
 initial begin
@@ -613,6 +613,9 @@ sdram sdram
 // 2600: Bits PB 0,1,3,6,7 are used for reset, select, b/w, left diff, right diff
 // 7800: Bits PB 0,1,3,6,7 are used for reset, select, pause, left diff, right diff
 // 7800: Bits PB 2 & 4 are used for output to select 2 button mode.
+
+assign last_paddle = '0;
+assign info_req = '0;
 
 assign PBin[7] = ~status[12];              // Right diff
 assign PBin[6] = ~status[13];              // Left diff
@@ -779,32 +782,6 @@ always @(posedge clk_sys) begin
 		dir_y <= ps2_mouse[5];
 	end
 end
-
-
-
-// -- PS2 to pokey
-// keyboard_map1 : entity work.ps2_to_atari800
-// generic map (ps2_enable => 0, direct_enable => 1)
-// PORT MAP
-// ( 
-// 	CLK => clk,
-// 	RESET_N => reset_n,
-
-// 	INPUT => x"000" & "000" & ps2_key(9) & "000" & ps2_key(8) & x"0" & ps2_key(7 downto 0),
-
-// 	KEYBOARD_SCAN => KEYBOARD_SCAN,
-// 	KEYBOARD_RESPONSE => KEYBOARD_RESPONSE,
-
-// 	CONSOL_START => CONSOL_START,
-// 	CONSOL_SELECT => CONSOL_SELECT,
-// 	CONSOL_OPTION => CONSOL_OPTION,
-
-// 	FKEYS => FKEYS,
-// 	FREEZER_ACTIVATE => freezer_activate,
-
-// 	PS2_KEYS_NEXT_OUT => open,
-// 	PS2_KEYS => ps2_keys
-// );
 
 logic [6:0] st_mouse;
 logic [3:0] st_m_cnt;

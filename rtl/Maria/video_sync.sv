@@ -117,24 +117,22 @@ localparam VBLANK_EX_START_PAL = 298;
 localparam VBLANK_EX_END = 24;
 
 assign VSync      = (row < VSYNC_END);
-assign vblank_int = (row >= (PAL ? VBLANK_START_PAL : VBLANK_START)) || (row < VBLANK_END);
+assign vblank     = (row >= (PAL ? VBLANK_START_PAL : VBLANK_START)) || (row < VBLANK_END);
 assign vblank_ex  = (row >= (PAL ? VBLANK_EX_START_PAL : VBLANK_EX_START)) || (row < VBLANK_EX_END);
 
 assign HSync      = col < HSYNC_END;
 assign hblank     = hide_border ? border : ((col >= HBLANK_START) || (col < HBLANK_END));
 assign border     = (col >= BORDER_START) || (col < BORDER_END);
 assign lrc        = (col == LINE_RESET_COUNT) || reset;
-assign vbe        = (row == VBLANK_END) && (col == 2);
+assign vbe        = (row == VBLANK_END) && (col == 0);
 assign hbs        = col == HBLANK_START;
 assign prst       = col == RCPRST;
 
 always_ff @(posedge clk) if (reset) begin
 	row <= bypass_bios ? 9'd39 : 9'd0;
 	col <= bypass_bios ? 9'd255 : 9'd0;
-end else if (mclk0) begin
+end else if (mclk1) begin
 	col <= col + 9'd1;
-	vblank_1 <= vblank_int;
-	vblank <= vblank_1;
 
 	if (col >= MAX_COLUMN) begin
 		col <= 0;

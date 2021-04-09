@@ -9,11 +9,14 @@
 module control (
 	input  logic             mclk0,
 	input  logic             mclk1,
+	input  logic             pclkp, // cpu clock phase
 	input  logic             maria_en,
 	input  logic [15:0]      AB,
 	input  logic [7:0]       DB_in,
 	output logic [7:0]       DB_out,
 	input  logic             RW,
+	input  logic             ABEN,
+	input  logic             noslow,
 
 	input  logic             drive_AB,
 
@@ -28,7 +31,7 @@ module control (
 	output logic             sel_slow_clock,
 
 	// when wait_sync is written to, ready is deasserted
-	output logic             deassert_ready,
+	output logic             wsync,
 
 	input  logic             clk_sys,
 	input  logic             reset,
@@ -38,12 +41,13 @@ module control (
 	output logic             cs_ram1,
 	output logic             cs_riot,
 	output logic             cs_tia,
-	output logic             cs_maria
+	output logic             cs_maria,
+	output logic             cram_select
 );
 
 	// Internal Memory Mapped Registers
 	logic [7:0]              ZPH, ZPL;
-	assign sel_slow_clock = ((~maria_en) ? 1'b1 : cs_tia || cs_riot);
+	assign sel_slow_clock = ~noslow && (~maria_en ? 1'b1 : (cs_tia || cs_riot));
 
 	assign ZP = {ZPH, ZPL};
 
@@ -52,7 +56,7 @@ module control (
 		if (maria_en) casex (AB[15:5])
 				// RIOT RAM: "Do Not Use" in 7800 mode.
 				11'b0000_010x_1xx,
-				11'b0000_001x_1xx: cs_riot = 1;
+				11'b0000_001x_1xx: cs_riot = ~ABEN;
 
 				// 1800-1FFF: 2K RAM.
 				11'b0001_1xxx_xxx: cs_ram1 = 1;
@@ -68,12 +72,12 @@ module control (
 				// TIA Registers:
 				// 0000-001F, 0100-001F, 0200-021F, 0300-031F
 				// All mirrors are ranges of the same registers
-				11'b0000_00xx_000: cs_tia = 1;
+				11'b0000_00xx_000: cs_tia = ~ABEN;
 
 				// MARIA Registers:
 				// 0020-003F, 0120-003F, 0220-023F, 0320-033F
 				// All ranges are mirrors of the same registers
-				11'b0000_00xx_001: cs_maria = 1;
+				11'b0000_00xx_001: cs_maria = ~ABEN;
 				default: ;
 
 		endcase else casex (AB[15:5])
@@ -83,52 +87,32 @@ module control (
 				default: ;
 		endcase
 	end
+	assign cram_select = cs_maria && ~RW && (pclkp && ~old_phase) && (|AB[1:0] || AB[4:0] == 5'h00);
 
-	logic [7:0] ctrl_1;
+	logic [7:0] ctrl_1, ctrl_2;
+	logic old_phase;
+	logic ctrl_write;
+	wire [4:0] color_ram_index [32] = '{5'd0,
+			5'd1,  5'd2,  5'd3,  5'd0, 5'd4,  5'd5,  5'd6,  5'd0,
+			5'd7,  5'd8,  5'd9,  5'd0, 5'd10, 5'd11, 5'd12, 5'd0,
+			5'd13, 5'd14, 5'd15, 5'd0, 5'd16, 5'd17, 5'd18, 5'd0,
+			5'd19, 5'd20, 5'd21, 5'd0, 5'd22, 5'd23, 5'd24};
 	always_ff @(posedge clk_sys) begin
-		if (reset || ~maria_en) begin
-			ctrl_1 <= '1; // Allow skipping bios by disabling dma on reset
-			ctrl <= '1;
-			color_map <= 200'b0; // FIXME: convert this to RAM?
-			char_base <= 8'b0;
-			DB_out <= 0;
-			{ZPH,ZPL} <= bypass_bios ? (pal ? {8'h27, 8'h30} : {8'h00, 8'h84}) : 8'd0;
-		end else if (pclk0) begin
-			ctrl <= ctrl_1;
-			deassert_ready <= 1'b0;
-			if (cs_maria) begin
+		if (mclk1)
+			ctrl_write <= ~RW && cs_maria && AB[5:0] == 6'h3c;
+		 if (pclkp) begin
+			//ctrl <= ctrl_1;
+			wsync <= 1'b0;
+			if (~RW && cs_maria) begin
 				case(AB[5:0])
-					6'h20: color_map[0] <= DB_in; // Background color
-					6'h21: color_map[1] <= DB_in;
-					6'h22: color_map[2] <= DB_in;
-					6'h23: color_map[3] <= DB_in;
-					6'h24: deassert_ready <= 1'b1;
-					6'h25: color_map[4] <= DB_in;
-					6'h26: color_map[5] <= DB_in;
-					6'h27: color_map[6] <= DB_in;
-					6'h29: color_map[7] <= DB_in;
-					6'h2a: color_map[8] <= DB_in;
-					6'h2b: color_map[9] <= DB_in;
+					6'h24: wsync <= 1'b1;
+					6'h28: ; //vblank status read
 					6'h2c: ZPH <= DB_in;
-					6'h2d: color_map[10] <= DB_in;
-					6'h2e: color_map[11] <= DB_in;
-					6'h2f: color_map[12] <= DB_in;
 					6'h30: ZPL <= DB_in;
-					6'h31: color_map[13] <= DB_in;
-					6'h32: color_map[14] <= DB_in;
-					6'h33: color_map[15] <= DB_in;
 					6'h34: char_base <= DB_in;
-					6'h35: color_map[16] <= DB_in;
-					6'h36: color_map[17] <= DB_in;
-					6'h37: color_map[18] <= DB_in;
-					6'h39: color_map[19] <= DB_in;
-					6'h3a: color_map[20] <= DB_in;
-					6'h3b: color_map[21] <= DB_in;
+					6'h38: ; // No register
 					6'h3c: ctrl_1 <= DB_in;
-					6'h3d: color_map[22] <= DB_in;
-					6'h3e: color_map[23] <= DB_in;
-					6'h3f: color_map[24] <= DB_in;
-					default: ;
+					default: if (cram_select) color_map[color_ram_index[AB[4:0]]] <= DB_in;
 				endcase
 			end else if (RW && cs_maria) begin
 				// Maria reads will return 0 if invalid. Not open bus or anything else.
@@ -137,6 +121,21 @@ module control (
 				else
 					DB_out <= 8'h0;
 			end
+		end else if (mclk0 && ~ctrl_write)
+			ctrl <= ctrl_1;
+
+		if (mclk0) begin
+			old_phase <= pclkp;
+		end
+
+		if (reset || ~maria_en) begin
+			ctrl_1 <= '1; // Allow skipping bios by disabling dma on reset
+			ctrl_2 <= '1;
+			ctrl <= '1;
+			color_map <= 200'b0; // FIXME: convert this to RAM?
+			char_base <= 8'b0;
+			DB_out <= 0;
+			{ZPH,ZPL} <= bypass_bios ? (pal ? {8'h27, 8'h30} : {8'h00, 8'h84}) : 8'd0;
 		end
 	end
 endmodule

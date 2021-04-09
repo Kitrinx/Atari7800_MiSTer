@@ -129,8 +129,9 @@ localparam hblank_start = 0; // Blank 68 counts
 localparam hblank_end = 67; // Blank 68 counts
 
 logic [5:0] lfsr;
-logic hsync_1, hblank_1;
+logic hsync_1;
 logic hmove_latch;
+logic hblank_set;
 
 logic err, rhs, rcb, shs, lrhb, ehb;
 
@@ -154,46 +155,37 @@ always_comb begin
 			6'b010111: lrhb = 1;   // Late Reset Hblank
 			default: ;
 	endcase
-
-// 	if (rsync)111011 000100
-// 		shb = 1;
 end
-
-// always_latch begin
-// 	if (cnt)
-// 		cntd = 1;
-// 	if (err | shb)
-// 		cntd = 0;
-// end
 
 logic shb_1;
 always_ff @(posedge clk) if (rst) begin
 	lfsr <= 0;
 	hmove_latch <= 0;
 	hsync <= 0;
-	hblank <= 0;
+	hblank_set <= 0;
 	hgap <= 0;
 	shb <= 0;
 	hsync_1 <= 0;
-	hblank_1 <= 0;
 	cntd <= 0;
 	shbd <= 0;
+	shb_1 <= 0;
 end else begin
 	if (hmove)
 		hmove_latch <= 1;
 
 	if (HP2) begin
-		shb <= ehb || rsync || err;
+		lfsr <= (ehb || rsync || err) ? 6'd0 : {~((lfsr[1] && ~lfsr[0]) || ~(lfsr[1] || ~lfsr[0])), lfsr[5:1]};		
 	end
 
 	if (HP1) begin
-		lfsr <= shb ? 6'd0 : {~((lfsr[1] && ~lfsr[0]) || ~(lfsr[1] || ~lfsr[0])), lfsr[5:1]};
+		hblank <= hblank_set;
+		shb <= ehb || rsync || err;
+
 		cntd <= cnt;
 		hsync <= hsync_1;
-		//hblank <= hblank_1;
 
 		if (shb) begin
-			hblank <= 1;
+			hblank_set <= 1;
 			hmove_latch <= 0;
 			hgap <= 1;
 			lfsr <= 6'd0;
@@ -207,12 +199,12 @@ end else begin
 			hsync_1 <= 1;
 		end
 		if (rhb) begin
-			hblank <= hmove_latch;
+			hblank_set <= hmove_latch;
 			hgap <= 0;
 		end
 
 		if (lrhb) begin
-			hblank <= 0;
+			hblank_set <= 0;
 		end
 	end
 end
@@ -352,7 +344,7 @@ module hmove_gen
 	assign bl_mclk = (~hblank || blec && HP1) && cc;
 
 	logic [3:0] hmove_cnt;
-	logic sec_1;
+	logic sec_1, sec_2, sec_3;
 
 	wire [3:0] hmc_uns = {~hmove_cnt[3], hmove_cnt[2:0]};
 
@@ -365,11 +357,13 @@ module hmove_gen
 		else if (sec)
 			sec_1 <= 0;
 
-		if (HP2) begin
-			sec <= sec_1;
+		if (HP1) begin
+			sec_2 <= sec_1;
+			sec <= sec_3;
 		end
 
-		if (HP1) begin
+		if (HP2) begin
+			sec_3 <= sec_2;
 			if (sec)
 				{p0ec, p1ec, m0ec, m1ec, blec} <= 5'b11111;
 
@@ -942,7 +936,7 @@ always @(posedge clk) begin
 			end else if (~&addr[3:1]) begin
 				d_out[7:6] <= rreg[addr[3:0]][7:6] | (open_bus[7:6] & ~rpm[addr[3:0]]); // reads only use the lower 4 bits of addr
 			end else
-				d_out[7:6] <= open_bus[7:6];
+				d_out[7:6] <= 0;
 		end
 	end
 	if (rst)
@@ -1231,7 +1225,7 @@ always_ff @(posedge clk) begin
 	if (wsync && cc)
 		rdy <= 0;
 
-	if (shb)
+	if (shb && cc)
 		rdy <= 1;
 
 	if (rst)

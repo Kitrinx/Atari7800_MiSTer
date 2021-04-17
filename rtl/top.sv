@@ -113,7 +113,7 @@ module Atari7800(
 
 	// Track the open bus since FPGA's don't use bidirectional logic internally
 	always_ff @(posedge clk_sys) begin
-		open_bus <= maria_AB_out ? 8'd0 :(~RW ? write_DB : read_DB);
+		open_bus <= /*maria_AB_out ? 8'd0 :*/(~RW ? write_DB : read_DB);
 		last_address <= AB;
 	end
 
@@ -462,7 +462,8 @@ module M6502C
 );
 
 	logic cpu_halt_n = 1;
-	
+	logic rdy_delay = 1;
+
 	T65 cpu (
 		.mode (0),
 		.BCD_en(1),
@@ -470,7 +471,7 @@ module M6502C
 		.Res_n(~reset),
 		.Clk(clk_sys),
 		.Enable(pclk1 && cpu_halt_n),
-		.Rdy(RDY),
+		.Rdy(rdy_delay),
 
 		.IRQ_n(IRQ_n),
 		.NMI_n(NMI_n),
@@ -485,8 +486,10 @@ module M6502C
 		if (reset) begin
 			is_halted <= 0;
 			cpu_halt_n <= 1;
+			rdy_delay <= 1;
 		end else if (pclk1) begin
 			cpu_halt_n <= halt_n;
+			rdy_delay <= RDY;
 		end
 	end
 

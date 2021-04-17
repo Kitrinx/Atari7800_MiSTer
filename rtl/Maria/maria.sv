@@ -112,11 +112,11 @@ module maria(
 	logic             ready_int;
 	logic             cram_sel;
 	logic             ABEN;
-	logic             old_halt;
 	logic             old_ready;
 	logic             old_men;
 	logic [3:0]       men_count;
 	logic             noslow;
+	logic             pclk;
 
 	// Apply color kill if needed
 	assign YC = UV_out & (ctrl[7] ? 8'h0F : 8'hFF);
@@ -124,18 +124,15 @@ module maria(
 
 	// Maria being enabled is a condition for NMI
 	assign NMI_n = NMI_ung_n || ~maria_en;
-	assign halt_n = ~pclk_toggle ? ~halt_en : old_halt;
-	assign ready = ~pclk_toggle ? (lrc || ready_int) : old_ready;
-	
-
+	assign halt_n = ~halt_en;
+	assign ready = ~pclk ? (lrc || ready_int) : old_ready;
 
 	always @(posedge clk_sys) begin
 		if (reset) begin
 			clock_div <= bypass_bios ? 2'd1 : 2'd2;
 			clk_toggle <= 0;
 			pclk_toggle <= bypass_bios ? 1'd1: 1'd0;
-			old_ready = 1;
-			old_halt = 1;
+			old_ready <= 1;
 			pal_counter <= 0;
 			mclk1 <= 0;
 			mclk0 <= 0;
@@ -162,6 +159,13 @@ module maria(
 			if (|men_count)
 				men_count <= men_count - 1'd1;
 
+			if (mclk0) begin
+				if (pclk1)
+					pclk <= 0;
+				else if (pclk0)
+					pclk <= 1;
+			end
+
 			if (pal_counter == 109) begin
 				pal_counter <= 0;
 				mclk0 <= 0;
@@ -183,15 +187,14 @@ module maria(
 			pclk0 <= 0;
 			pclk1 <= 0;
 
-			if (pclk_toggle)
+			if (pclk0)
 				slow_clk_latch <= sel_slow_clock;
 
-			if (~pclk_toggle) begin
+			if (~pclk) begin
 				old_ready <= ready_int;
-				old_halt <= ~halt_en;
 			end
 
-			if (mclk0) begin
+			if (mclk1) begin
 				if (clock_div)
 					clock_div <= clock_div - 1'd1;
 				else begin
@@ -232,7 +235,7 @@ module maria(
 	control control_inst (
 		.mclk0           (mclk0),
 		.mclk1           (mclk1),
-		.pclkp           (pclk_toggle),
+		.pclkp           (pclk),
 		.maria_en        (maria_en),
 		.AB              (AB_in),
 		.ABEN            (drive_AB),
@@ -275,6 +278,8 @@ module maria(
 		.DM              (ctrl[6:5]),
 		.AB              (AB_out),
 		.ABEN            (ABEN),
+		.PCLKEDGE        (~pclk_toggle),
+		.pclk            (pclk),
 		.latch_byte      (latch_byte),
 		.d_in            (d_in),
 		.latch_hpos      (latch_hpos),

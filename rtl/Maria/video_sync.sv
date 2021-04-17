@@ -124,13 +124,13 @@ assign HSync      = col < HSYNC_END;
 assign hblank     = hide_border ? border : ((col >= HBLANK_START) || (col < HBLANK_END));
 assign border     = (col >= BORDER_START) || (col < BORDER_END);
 assign lrc        = (col == LINE_RESET_COUNT) || reset;
-assign vbe        = (row == VBLANK_END) && (col == 0);
+assign vbe        = (row == VBLANK_END) && (col == 1);
 assign hbs        = col == HBLANK_START;
 assign prst       = col == RCPRST;
 
 always_ff @(posedge clk) if (reset) begin
-	row <= bypass_bios ? 9'd39 : 9'd0;
-	col <= bypass_bios ? 9'd255 : 9'd0;
+	row <= bypass_bios ? 9'd38 : 9'd0;
+	col <= bypass_bios ? 9'd278 : 9'd0;
 end else if (mclk1) begin
 	col <= col + 9'd1;
 

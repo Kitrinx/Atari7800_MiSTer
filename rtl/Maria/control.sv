@@ -89,7 +89,7 @@ module control (
 	end
 	assign cram_select = cs_maria && ~RW && (pclkp && ~old_phase) && (|AB[1:0] || AB[4:0] == 5'h00);
 
-	logic [7:0] ctrl_1, ctrl_2;
+	logic [7:0] ctrl_1;
 	logic old_phase;
 	logic ctrl_write;
 	wire [4:0] color_ram_index [32] = '{5'd0,
@@ -130,7 +130,6 @@ module control (
 
 		if (reset || ~maria_en) begin
 			ctrl_1 <= '1; // Allow skipping bios by disabling dma on reset
-			ctrl_2 <= '1;
 			ctrl <= '1;
 			color_map <= 200'b0; // FIXME: convert this to RAM?
 			char_base <= 8'b0;

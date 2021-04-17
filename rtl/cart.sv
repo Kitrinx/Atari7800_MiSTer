@@ -236,22 +236,9 @@ logic [7:0] covox_reg[4];
 
 // FIXME: this could possibly overflow, but the output is too relatively quiet without it.
 // Possibly if it becomes an issue add a compressor.
-logic [1:0] channels_used;
 always_comb begin
-	covox_r = {covox_reg[0], 8'd0};
-	covox_l = {covox_reg[0], 8'd0};;
-	case (channels_used)
-
-		2'd1: begin
-			covox_r = {covox_reg[0], 8'd0};
-			covox_l = {covox_reg[1], 8'd0};
-		end
-		2'd2, 2'd3: begin
-			covox_r = {{1'b0, covox_reg[0]} + covox_reg[2], 7'd0};
-			covox_l = {{1'b0, covox_reg[1]} + covox_reg[3], 7'd0};
-		end
-		default:;
-	endcase
+	covox_r = {{1'b0, covox_reg[0]} + covox_reg[2], 7'd0};
+	covox_l = {{1'b0, covox_reg[1]} + covox_reg[3], 7'd0};
 end
 
 always_ff @(posedge clk_sys) begin
@@ -259,10 +246,8 @@ always_ff @(posedge clk_sys) begin
 		bank_reg <= 8'd0;
 		ram_bank <= 3'd0;
 		covox_reg <= '{8'd0, 8'd0, 8'd0, 8'd0};
-		channels_used <= 0;
 	end else if (~rw & cart_cs & pclk0) begin
 		if (is_covox) begin
-			channels_used <= channels_used | address_in[1:0];
 			covox_reg[address_in[1:0]] <= din;
 		end
 		if (bank_type == 3'd0 && address_in[15:14] == 2'b10) begin//supergame bank

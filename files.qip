@@ -5,14 +5,13 @@ set_global_assignment -name QIP_FILE rtl/jt51/jt51.qip
 set_global_assignment -name VHDL_FILE rtl/dpram.vhd
 set_global_assignment -name VHDL_FILE rtl/bram.vhd
 set_global_assignment -name VHDL_FILE rtl/dpram.vhd
-set_global_assignment -name VHDL_FILE rtl/tia_sup.vhd
 set_global_assignment -name VHDL_FILE rtl/ps2_keyboard.vhdl
-#set_global_assignment -name VHDL_FILE rtl/syncreset_enable_divider.vhd
 set_global_assignment -name VHDL_FILE rtl/ps2_to_pokey.vhdl
-set_global_assignment -name VHDL_FILE rtl/cart2600.vhdl
 set_global_assignment -name VERILOG_FILE rtl/souper.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tia.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cart.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cart2600.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/banks2600.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video_mux.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cofi.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/lightgun.sv

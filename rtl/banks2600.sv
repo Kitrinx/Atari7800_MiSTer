@@ -412,7 +412,7 @@ module mapper_P2
 
 		if (ce) begin
 			music_div <= music_div + 1'd1;
-			if (music_div == 180) begin // Divide down to 15-20khz
+			if (music_div == 178) begin // Divide down to 15-20khz (180 == 19.88khz, 170 = 21khz)
 				music_div <= 10'd0;
 				music_clock <= music_clock + 1'd1;
 				if (music_clock % (tops[5] + 1'd1) > bottoms[5])
@@ -600,7 +600,7 @@ module mapper_E7
 	output  [10:0]  ram_a,
 	output  logic [15:0]  rom_a
 );
-	logic [3:0] bank;
+	logic [2:0] bank;
 	logic [1:0] ram_bank;
 
 	// FIXME: Add upper ram bank?
@@ -624,7 +624,7 @@ module mapper_E7
 		if (a_change) begin
 			if (a_in[12:4] == 9'h1FE) begin
 				if (~a_in[3])
-					bank <= a_in[3:0];
+					bank <= a_in[2:0];
 				else if (~a_in[2])
 					ram_bank <= a_in[1:0];
 			end
@@ -767,7 +767,6 @@ module mapper_AR
 	logic [18:0] preload_a;
 	logic [7:0] header_a;
 	logic [7:0] bank_a;
-	logic read_byte;
 	ar_load_state state, state_next;
 	logic [11:0] audio_timer;
 	logic [3:0] bit_position;
@@ -800,6 +799,8 @@ module mapper_AR
 	wire [3:0] bit_pos_minus_1 = bit_position - 1'd1;
 	wire rom_bank = &current_bank;
 	wire [1:0] current_bank = ~a_in[11] ? bank_lut[bank][0] : bank_lut[bank][1];
+	wire adc_load = tape_in[1];
+
 	//wire eq_tone = state == AR_EQ_TONE;
 	assign flags_out = {15'd0, rom_bank || ~ram_rw || adata_select};
 	assign oe = a_in[12] ? 8'hFF : 8'h00;
@@ -836,6 +837,9 @@ module mapper_AR
 	end
 
 	always @(posedge clk) begin
+		if (adc_load)
+			audio_data <= tape_in[0];
+
 		if (ce) begin // Timed with a 3.579mhz clock (2600 oscillator freq)
 			fetch_byte <= 0;
 			if (playback) begin
@@ -879,7 +883,6 @@ module mapper_AR
 					end
 				end
 				AR_FETCH: begin
-					read_byte <= 1;
 					if (fetch_byte) begin
 						state <= state_next;
 					end
@@ -890,7 +893,6 @@ module mapper_AR
 					state_count <= state_count + 1'd1;
 					state_next <= &state_count[8:0] ? AR_HEADER : AR_PREAMBLE;
 					state <= AR_FETCH;
-					read_byte <= 0;
 				end
 				AR_HEADER: begin
 					audio_buffer <= rom_do;
@@ -904,7 +906,6 @@ module mapper_AR
 						state_next <= AR_PREBANK;
 					end
 					state <= AR_FETCH;
-					read_byte <= 0;
 				end
 				AR_PREBANK: begin
 					audio_buffer <= rom_do;
@@ -915,7 +916,6 @@ module mapper_AR
 						state_next <= AR_PREBANK;
 					end
 					state <= AR_FETCH;
-					read_byte <= 0;
 				end
 				AR_BANK: begin
 					audio_buffer <= rom_do;
@@ -927,7 +927,6 @@ module mapper_AR
 						state_next <= AR_BANK;
 					bank_a <= bank_a + 1'd1;
 					state <= AR_FETCH;
-					read_byte <= 0;
 				end
 				AR_POSTAMBLE: begin
 					audio_buffer <= 8'd0;
@@ -940,7 +939,6 @@ module mapper_AR
 					end
 				end
 				AR_END: begin
-					read_byte <= 0;
 					playback <= 0;
 					audio_buffer <= 0;
 					audio_data <= 0;
@@ -954,14 +952,14 @@ module mapper_AR
 			if (adata_select && ~playback) begin
 				if (|cooldown)
 					cooldown <= cooldown - 1'd1;
-				else
+				else if (~adc_load)
 					state <= AR_START;
 			end
 
 			if (a_in == 13'h1FF8) begin // Control Register
 				bank <= we_byte[4:2];
 				ram_we <= we_byte[1];
-				rom_en <= we_byte[0];
+				//rom_en <= we_byte[0];
 				we_cycle <= '0;
 			end
 
@@ -974,12 +972,13 @@ module mapper_AR
 		if (reset) begin
 			tape_num <= 0;
 			cooldown <= COOLDOWN_PERIOD;
+			audio_data <= 0;
 			state <= AR_END;
 			state_next <= AR_END;
 			bank <= 0;
 			ram_we <= 0;
 			we_cycle <= '0;
-			rom_en <= 1;
+			//rom_en <= 1;
 		end
 	end
 
@@ -1063,8 +1062,10 @@ module mapper_3E
 	output  [7:0]   oe,
 	output          ram_sel,
 	output          ram_rw,
-	output  [13:0]  ram_a,
-	output  [18:0]  rom_a
+	output  [17:0]  ram_a,
+	output  [18:0]  rom_a,
+	// special
+	input   [18:0]  rom_size
 );
 	assign flags_out = 16'd0;
 	assign d_out = 8'd0;
@@ -1073,21 +1074,22 @@ module mapper_3E
 	assign ram_a = {ram_bank, a_in[9:0]};
 	assign ram_rw = ~a_in[10] || ~ram_en || a_change;
 
-	logic [3:0] bank;
-	logic [3:0] ram_bank;
+	logic [7:0] bank;
+	logic [4:0] ram_bank;
 	logic ram_en;
+	wire [7:0] highest_bank = rom_size[18:11] - 1'd1;
 
-	wire [3:0] current_bank = ~a_in[11] ? bank : 4'hF;
+	wire [7:0] current_bank = ~a_in[11] ? bank : highest_bank;
 
 	always @(posedge clk) begin
 		case (a_in)
 			13'h003F: begin
-				bank <= d_in[3:0];
+				bank <= d_in[7:0];
 				ram_en <= 0;
 			end
 			13'h003E: begin
 				ram_en <= 1;
-				ram_bank <= d_in[3:0];
+				ram_bank <= d_in[4:0];
 			end
 		endcase
 

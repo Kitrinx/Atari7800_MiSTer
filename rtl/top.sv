@@ -44,6 +44,12 @@ module Atari7800(
 	output logic  [7:0] cart_din,
 	output logic        RW,
 	input  logic        loading,
+	
+	output       [17:0] cartram_addr,
+	output              cartram_wr,
+	output              cartram_rd,
+	output       [7:0]  cartram_wrdata,
+	input        [7:0]  cartram_data,
 
 	// Tia inputs
 	input  logic  [3:0] idump,
@@ -78,7 +84,8 @@ module Atari7800(
 	input              pal_wr,
 	input [7:0]        pal_data,
 	input              blend,
-	input              ar_control
+	input              ar_control,
+	output [3:0]       i_read
 );
 
 	/////////////
@@ -119,16 +126,23 @@ module Atari7800(
 	logic           pclk1, pclk0, pclk1_m, pclk0_m, pclk1_t, pclk0_t;
 	logic           tia_clk_x2;
 	logic           read_2600;
+	logic [1:0]     pause_clock;
+	logic [17:0]    cartram_addr78, cartram_addr26;
+	logic           cartram_wr78, cartram_wr26;
+	logic [7:0]     cartram_wrdata78, cartram_wrdata26;
+	logic           cartram_rd78, cartram_rd26;
+	logic [7:0]     cartram_data_bram;
 
 	assign RDY = maria_RDY && tia_RDY;
 	assign cpu_halt_n = (ctrl_writes == 2'd2) ? halt_n : 1'b1;
-	assign cart_read = (tia_en ? read_2600 : (cart_read_flag & mclk1));
+	assign cart_read = pause ? &pause_clock : (tia_en ? read_2600 : (cart_read_flag & mclk1));
 	assign cart_addr_out = tia_en ? cart_2600_addr_out : cart_7800_addr_out;
 	assign cart_DB_out = tia_en ? cart_2600_DB_out : cart_7800_DB_out;
 	assign PAread = cs_riot && ~|AB[4:0] && RW && pclk0;
 
 	// Track the open bus since FPGA's don't use bidirectional logic internally
 	always_ff @(posedge clk_sys) begin
+		pause_clock <= pause_clock + 1'd1;
 		open_bus <= (~RW ? write_DB : read_DB);
 		last_address <= AB;
 	end
@@ -270,7 +284,8 @@ module Atari7800(
 		.decomb         (decomb),
 		.is_pal         (tia_pal),
 		.stabilize      (tia_stab),
-		.is_f1          (tia_f1)
+		.is_f1          (tia_f1),
+		.paddle_read    (i_read)
 	);
 
 	video_mux mux
@@ -389,38 +404,65 @@ module Atari7800(
 		.tia_mode     (tia_mode)
 	);
 
+	assign cartram_wr = tia_en ? cartram_wr26 : cartram_wr78;
+	assign cartram_rd = tia_en ? cartram_rd26 : cartram_rd78;
+	assign cartram_addr = tia_en ? cartram_addr26 : cartram_addr78;
+	assign cartram_wrdata = tia_en ? cartram_wrdata26 : cartram_wrdata78;
+
+	logic [16:0] reset_addr; // Clear ram while reset is held
+	always @(posedge clk_sys) begin :reset_cart
+		logic old_reset;
+		old_reset <= reset;
+		reset_addr <= (reset && ~old_reset) ? 16'd0 : reset_addr + 1'd1;
+	end
+
+	spram #(.addr_width(17), .mem_name("CART")) cart_ram
+	(
+		.clock   (clk_sys),
+		.address (reset ? reset_addr : cartram_addr),
+		.data    (reset ? 8'd0 : cartram_wrdata),
+		.wren    (reset ? 1'd1 : cartram_wr),
+		.q       (cartram_data_bram),
+		.cs      (1)
+	);
+
 	cart cart
 	(
-		.clk_sys      (clk_sys),
-		.pclk0        (pclk0),
-		.pclk1        (pclk1),
-		.IRQ_n        (IRQ_n),
-		.halt_n       (cpu_halt_n),
-		.reset        (reset),
-		.address_in   (AB[15:0]),
-		.din          (write_DB),
-		.rom_din      (cart_out),
-		.cart_flags   (cart_flags),
-		.cart_size    (cart_size),
-		.cart_save    (cart_save),
-		.cart_cs      (cs_cart),
-		.cart_xm      (cart_xm),
-		.cart_read    (cart_read_flag),
-		.hsc_en       (hsc_en),
-		.hsc_ram_cs   (hsc_ram_cs),
-		.hsc_ram_din  (hsc_ram_dout),
-		.rw           (RW),
-		.dout         (cart_7800_DB_out),
-		.pokey_audio_r(pokey_audio_r),
-		.pokey_audio_l(pokey_audio_l),
-		.ym_audio_r   (ym_audio_r),
-		.ym_audio_l   (ym_audio_l),
-		.rom_address  (cart_7800_addr_out),
-		.open_bus     (open_bus),
-		.covox_r      (covox_r),
-		.covox_l      (covox_l),
-		.ps2_key      (ps2_key),
-		.pokey_irq_en (pokey_irq)
+		.clk_sys        (clk_sys),
+		.pclk0          (pclk0),
+		.pclk1          (pclk1),
+		.IRQ_n          (IRQ_n),
+		.halt_n         (cpu_halt_n),
+		.reset          (reset),
+		.address_in     (AB[15:0]),
+		.din            (write_DB),
+		.rom_din        (cart_out),
+		.cart_flags     (cart_flags),
+		.cart_size      (cart_size),
+		.cart_save      (cart_save),
+		.cart_cs        (cs_cart),
+		.cart_xm        (cart_xm),
+		.cart_read      (cart_read_flag),
+		.cartram_addr   (cartram_addr78),
+		.cartram_wr     (cartram_wr78),
+		.cartram_rd     (cartram_rd78),
+		.cartram_wrdata (cartram_wrdata78),
+		.cartram_data   (cartram_data_bram),
+		.hsc_en         (hsc_en),
+		.hsc_ram_cs     (hsc_ram_cs),
+		.hsc_ram_din    (hsc_ram_dout),
+		.rw             (RW),
+		.dout           (cart_7800_DB_out),
+		.pokey_audio_r  (pokey_audio_r),
+		.pokey_audio_l  (pokey_audio_l),
+		.ym_audio_r     (ym_audio_r),
+		.ym_audio_l     (ym_audio_l),
+		.rom_address    (cart_7800_addr_out),
+		.open_bus       (open_bus),
+		.covox_r        (covox_r),
+		.covox_l        (covox_l),
+		.ps2_key        (ps2_key),
+		.pokey_irq_en   (pokey_irq)
 	);
 
 	assign cart_2600_addr_out[24:19] = '0;
@@ -441,6 +483,11 @@ module Atari7800(
 		.rom_size       (cart_size),
 		.rom_a          (cart_2600_addr_out[18:0]),
 		.rom_read       (read_2600),
+		.cartram_addr   (cartram_addr26),
+		.cartram_wr     (cartram_wr26),
+		.cartram_rd     (cartram_rd26),
+		.cartram_wrdata (cartram_wrdata26),
+		.cartram_data   (cartram_data_bram),
 		.oe             (),
 		.open_bus       (open_bus),
 		.tape_in        (tape_in),
@@ -476,7 +523,7 @@ module ctrl_reg
 			tia_en_out <= 0;
 			wrote_once <= 0;
 			writes <= 0;
-		end	else if (bypass_bios && ~wrote_once) begin
+		end else if (bypass_bios && ~wrote_once) begin
 			lock_out <= tia_mode ? 1'd1 : 1'd0;
 			maria_en_out <= tia_mode ? 1'd0 : 1'd1;
 			bios_en_out <= 1;

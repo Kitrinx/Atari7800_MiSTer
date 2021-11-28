@@ -31,7 +31,11 @@ module cart2600
 	output  [18:0]  rom_a,      // Outgoing absolute rom address for image.
 	output          rom_read,   // Initiate read from SDRAM
 	
-
+	output   [17:0] cartram_addr,
+	output          cartram_wr,
+	output          cartram_rd,
+	output   [7:0]  cartram_wrdata,
+	input    [7:0]  cartram_data,
 
 	// Tape Signals
 	output          tape_audio, // Tape audio output
@@ -46,7 +50,7 @@ module cart2600
 	logic [7:0]  out_en[`NUM_MAPPERS];
 	logic        ram_rw[`NUM_MAPPERS];
 	logic        ram_sel[`NUM_MAPPERS];
-	logic [13:0] ram_a[`NUM_MAPPERS];
+	logic [17:0] ram_a[`NUM_MAPPERS];
 	logic [12:0] old_ain;
 	logic [7:0]  bg_data;
 	logic        ar_read;
@@ -59,7 +63,7 @@ module cart2600
 	logic [7:0]  sel_out_en;
 	logic        sel_ram_rw;
 	logic        sel_ram_sel;
-	logic [13:0] sel_ram_a;
+	logic [17:0] sel_ram_a;
 	logic [18:0] rom_mask;
 
 	assign rom_mask = rom_size - 1'd1;
@@ -97,7 +101,7 @@ module cart2600
 			else if (sel_flags_out[1])
 				d_out = (sel_direct_do & rom_do);
 			else if (sel_ram_sel) begin
-				if (ram_rw)
+				if (sel_ram_rw)
 					d_out = cr_do;
 			end else
 				d_out = rom_do;
@@ -111,15 +115,9 @@ module cart2600
 	// design does not reproduce that issue.
 	wire address_change = old_ain != a_in;
 
-	logic [13:0] reset_addr; // Clear ram while reset it held
 	always @(posedge clk) begin :reset_2600_cart
-		logic old_reset;
-
 		old_ain <= a_in;
-		old_reset <= reset;
-		reset_addr <= (reset && ~old_reset) ? 14'd0 : reset_addr + 1'd1;
 	end
-
 
 	// Bank CTY is compatible with F4 minus the ARM enhanced music
 	assign direct_do[BANKCTY]     = direct_do[BANKF4];
@@ -147,15 +145,11 @@ module cart2600
 	assign ram_a[BANKDPCP]        = '0;
 	assign rom_addr[BANKDPCP]     = '0;
 
-	// Cart ram shared between mappers
-	spram #(.addr_width(14), .mem_name("M260")) superchip_ram
-	(
-		.clock      (clk),
-		.address    (reset ? reset_addr : sel_ram_a),
-		.data       (reset ? 8'd0 : d_in),
-		.wren       (reset ? 1'd1 : ~sel_ram_rw && sel_ram_sel),
-		.q          (cr_do)
-	);
+	assign cartram_addr = sel_ram_a;
+	assign cartram_wr = ~sel_ram_rw && sel_ram_sel && ~address_change;
+	assign cartram_rd = sel_ram_sel && ~cartram_wr;
+	assign cartram_wrdata = d_in;
+	assign cr_do = cartram_data;
 
 	// Other?
 	// SV   -- Spectravideo Compumate (seems useless)
@@ -477,7 +471,8 @@ module cart2600
 		.ram_sel    (ram_sel[BANK3E]),
 		.ram_rw     (ram_rw[BANK3E]),
 		.ram_a      (ram_a[BANK3E]),
-		.rom_a      (rom_addr[BANK3E])
+		.rom_a      (rom_addr[BANK3E]),
+		.rom_size   (rom_size)
 	);
 
 	mapper_SB mapper_SB

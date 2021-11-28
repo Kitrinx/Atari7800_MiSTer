@@ -492,14 +492,18 @@ f_counter hclk_counter
 
 wire resp0 = (hclk.level_p2 && rsynd) || reset;
 
-cpuclk pclk_gen
-(
-	.clk        (clk),
-	.reset      (reset),
-	.oclk       (oclk),
-	.resp0      (resp0),
-	.phi0       (phi0_ll)
-);
+// This is an original cpu clock divider purely for reference purposes. I left it in case
+// anyone ever wanted to use it for research.
+
+// cpuclk pclk_gen
+// (
+// 	.clk        (clk),
+// 	.reset      (reset),
+// 	.oclk       (oclk),
+// 	.resp0      (resp0),
+// 	.phi0       (phi0_ll)
+// );
+assign phi0_ll = 0;
 
 always_ff @(posedge clk) begin : phi0_gen
 	// Oscillator Clock
@@ -1528,6 +1532,7 @@ module video_stabilize
 	logic vsync_en, vsync_set, vblank_en, midline_sync, vsync_override, set_end;
 	logic [7:0] vsync_count, vblank_count, lines_from_vs;
 	logic [7:0] dot_count = 0;
+	logic vsync_emulate;
 
 //	wire vblank_start = ~old_vblank && vblank_in;
 //	wire vblank_end   = old_vblank && ~vblank_in;
@@ -1545,9 +1550,12 @@ module video_stabilize
 
 	always_ff @(posedge clk) begin
 		old_hblank <= hblank_in;
-		// old_vblank <= vblank_in;
-		// old_hsync <= hsync_in;
 		old_vsync <= vsync_in;
+		if (&v_count) begin // Something is whack, emulate a signal
+			total_lines <= 9'd262;
+			vsync_override <= 1'd1;
+			vsync_emulate <= 1'd1;
+		end
 
 		// Base new lines on the horizontal LFSR reset
 		if (hblank_start) begin
@@ -1558,6 +1566,8 @@ module video_stabilize
 				vblank_en <= 1;
 
 			if ((vsync_override && v_count == (vsync_line - 1'd1)) || vsync_set) begin
+				if (vsync_emulate)
+					v_count <= 0;
 				vsync_en <= 1;
 				vsync_set <= 0;
 				vblank_en <= 1;
@@ -1577,6 +1587,7 @@ module video_stabilize
 			dot_count <= 0;
 
 		if (vsync_start) begin
+			vsync_emulate <= 0;
 			if (v_count != total_lines) begin
 				vsync_set <= 1;
 				if (total_lines - v_count < 3'd4) begin
@@ -1595,13 +1606,14 @@ module video_stabilize
 			v_count <= 0;
 			total_lines <= v_count;
 
-			if (dot_count > 15 && dot_count < 145) // Vsync outside of hblank can be considered invoking interlaced resolutions
-				midline_sync <= 1;
-			else
-				midline_sync <= 0;
+			// if (dot_count > 15 && dot_count < 145) // Vsync outside of hblank can be considered invoking interlaced resolutions
+			// 	midline_sync <= 1;
+			// else
+			// 	midline_sync <= 0;
 		end
 
 		if (reset) begin
+			vsync_emulate <= 0;
 			dot_count <= 0;
 			vsync_set <= 0;
 			vsync_line <= 0;
@@ -1660,7 +1672,8 @@ module TIA
 	output logic    [9:0] column,
 	output          is_pal,
 	output          is_f1,
-	input           stabilize
+	input           stabilize,
+	output  [3:0]   paddle_read // Helper to let us autodetect paddles
 );
 
 logic [7:0] wreg[64]; // Write registers. Only 44 are used.
@@ -1848,6 +1861,13 @@ always_comb begin
 			HMOVE: hmove = 1;
 			default: ;
 		endcase
+	end
+	paddle_read = '0;
+	if (RW_n && pclk.level_p2 && cs) begin
+		paddle_read[0] = (addr[3:0] == INPT0);
+		paddle_read[1] = (addr[3:0] == INPT1);
+		paddle_read[2] = (addr[3:0] == INPT2);
+		paddle_read[3] = (addr[3:0] == INPT3);
 	end
 end
 

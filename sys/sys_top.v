@@ -292,7 +292,8 @@ reg        cfg_custom_t = 0;
 reg  [5:0] cfg_custom_p1;
 reg [31:0] cfg_custom_p2;
 
-reg  [4:0] vol_att = 0;
+reg  [4:0] vol_att;
+initial vol_att = 5'b11111;
 
 reg  [6:0] coef_addr;
 reg  [8:0] coef_data;
@@ -334,6 +335,7 @@ always@(posedge clk_sys) begin
 
 	old_strobe <= io_strobe;
 	coef_wr <= 0;
+	shadowmask_wr <= 0;
 
 	if(~io_uio) begin
 		has_cmd <= 0;
@@ -451,6 +453,7 @@ always@(posedge clk_sys) begin
 					 3: arc2y <= io_din[12:0];
 				endcase
 			end
+			if(cmd == 'h3E) {shadowmask_wr,shadowmask_data} <= {1'b1, io_din};
 		end
 	end
 
@@ -618,6 +621,7 @@ wire         vbuf_write;
 
 wire  [23:0] hdmi_data;
 wire         hdmi_vs, hdmi_hs, hdmi_de, hdmi_vbl;
+wire         freeze;
 
 `ifndef MISTER_DEBUG_NOHDMI
 wire clk_hdmi  = hdmi_clk_out;
@@ -639,7 +643,7 @@ ascal
 (
 	.reset_na (~reset_req),
 	.run      (1),
-	.freeze   (0),
+	.freeze   (freeze),
 
 	.i_clk    (clk_ihdmi),
 	.i_ce     (ce_hpix),
@@ -1077,6 +1081,31 @@ scanlines #(1) HDMI_scanlines
 	.de_out(hdmi_de_sl)
 );
 
+wire [23:0] hdmi_data_mask;
+wire        hdmi_de_mask, hdmi_vs_mask, hdmi_hs_mask;
+
+reg [15:0] shadowmask_data;
+reg        shadowmask_wr = 0;
+
+shadowmask HDMI_shadowmask
+(
+	.clk(clk_hdmi),
+	.clk_sys(clk_sys),
+
+	.cmd_wr(shadowmask_wr),
+	.cmd_in(shadowmask_data),
+
+	.din(hdmi_data_sl),
+	.hs_in(hdmi_hs_sl),
+	.vs_in(hdmi_vs_sl),
+	.de_in(hdmi_de_sl),
+	
+	.dout(hdmi_data_mask),
+	.hs_out(hdmi_hs_mask),
+	.vs_out(hdmi_vs_mask),
+	.de_out(hdmi_de_mask)
+);
+
 wire [23:0] hdmi_data_osd;
 wire        hdmi_de_osd, hdmi_vs_osd, hdmi_hs_osd;
 
@@ -1089,10 +1118,10 @@ osd hdmi_osd
 	.io_din(io_din),
 
 	.clk_video(clk_hdmi),
-	.din(hdmi_data_sl),
-	.hs_in(hdmi_hs_sl),
-	.vs_in(hdmi_vs_sl),
-	.de_in(hdmi_de_sl),
+	.din(hdmi_data_mask),
+	.hs_in(hdmi_hs_mask),
+	.vs_in(hdmi_vs_mask),
+	.de_in(hdmi_de_mask),
 
 	.dout(hdmi_data_osd),
 	.hs_out(hdmi_hs_osd),
@@ -1522,6 +1551,7 @@ emu emu
 
 	.HDMI_WIDTH(direct_video ? 12'd0 : hdmi_width),
 	.HDMI_HEIGHT(direct_video ? 12'd0 : hdmi_height),
+	.HDMI_FREEZE(freeze),
 
 	.CLK_VIDEO(clk_vid),
 	.CE_PIXEL(ce_pix),

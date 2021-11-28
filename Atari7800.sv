@@ -43,6 +43,7 @@ module emu
 
 	input  [11:0] HDMI_WIDTH,
 	input  [11:0] HDMI_HEIGHT,
+	output        HDMI_FREEZE,
 
 `ifdef MISTER_FB
 	// Use framebuffer in DDRAM (USE_FB=1 in qsf)
@@ -253,8 +254,8 @@ parameter CONF_STR = {
 	"P2OIJ,High Score Cart,Auto,On,Off;",
 	"P2O7,Swap Joysticks,No,Yes;",
 	"P2-;",
-	"P2o69,Port1 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,BoosterGrip,SNAC;",
-	"P2oAD,Port2 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,BoosterGrip,SNAC;",
+	"P2o69,Port1 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,BoosterGrip,Robotron,SNAC;",
+	"P2oAD,Port2 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,BoosterGrip,Robotron,SNAC;",
 	"h1P2O5,SNAC Analog,Yes,No;",
 	"h1P2O6,Sega Phaser Mode,No,Yes;",
 	"P2oH,Swap Paddle A<->B,No,Yes;",
@@ -315,17 +316,17 @@ wire [7:0]  ioctl_index;
 wire [21:0] gamma_bus;
 
 wire [15:0] joy0,joy1,joy2,joy3;
-wire [15:0] joya_0,joya_1,joya_2,joya_3;
+wire [15:0] joya_0,joya_1,joya_2,joya_3,joyar_0,joyar_1,joyar_2,joyar_3;
 wire  [7:0] pd_0,pd_1,pd_2,pd_3;
 wire        ioctl_wait;
 
-reg  [31:0] sd_lba;
-reg         sd_rd = 0;
-reg         sd_wr = 0;
+reg  [31:0] sd_lba[1];
+reg         sd_rd;
+reg         sd_wr;
 wire        sd_ack;
 wire  [8:0] sd_buff_addr;
 wire  [7:0] sd_buff_dout;
-wire  [7:0] sd_buff_din;
+wire  [7:0] sd_buff_din[1];
 wire        sd_buff_wr;
 reg         en216p;
 wire [24:0] ps2_mouse;
@@ -338,11 +339,10 @@ logic [1:0] last_paddle;
 logic pad0_assigned, pad1_assigned, pad2_assigned, pad3_assigned;
 logic old_auto_paddle, auto_paddle;
 
-hps_io #(.STRLEN(($size(CONF_STR)>>3))) hps_io
+hps_io #(.CONF_STR(CONF_STR)) hps_io
 (
 	.clk_sys            (clk_sys),
 	.HPS_BUS            (HPS_BUS),
-	.conf_str           (CONF_STR),
 
 	.buttons            (buttons),
 	.forced_scandoubler (forced_scandoubler),
@@ -352,10 +352,14 @@ hps_io #(.STRLEN(($size(CONF_STR)>>3))) hps_io
 	.joystick_1         (joy1),
 	.joystick_2         (joy2),
 	.joystick_3         (joy3),
-	.joystick_analog_0  (joya_0),
-	.joystick_analog_1  (joya_1),
-	.joystick_analog_2  (joya_2),
-	.joystick_analog_3  (joya_3),
+	.joystick_l_analog_0  (joya_0),
+	.joystick_l_analog_1  (joya_1),
+	.joystick_l_analog_2  (joya_2),
+	.joystick_l_analog_3  (joya_3),
+	.joystick_r_analog_0  (joyar_0),
+	.joystick_r_analog_1  (joyar_1),
+	.joystick_r_analog_2  (joyar_2),
+	.joystick_r_analog_3  (joyar_3),
 	.paddle_0           (pd_0),
 	.paddle_1           (pd_1),
 	.paddle_2           (pd_2),
@@ -905,6 +909,8 @@ logic keystart, keyselect;
 logic [6:0] keypad0, keypad1;
 wire [3:0] kp_out0 = PAout[7:4];
 wire [3:0] kp_out1 = PAout[3:0];
+logic [3:0] robor, robol;
+
 
 //  1,2,3 ---> 1,2,3
 //  4,5,6 ---> Q,W,E
@@ -990,7 +996,7 @@ always @(posedge clk_sys) begin
 
 end
 
-wire [7:0] snac_type = 8'd10;
+wire [7:0] snac_type = 8'd11;
 wire [3:0] snac_pa_in = {USER_IN[3], USER_IN[5], USER_IN[0], (status[6] ? ~USER_IN[2] : USER_IN[1])};
 wire [1:0] snac_id_in = {USER_IN[6], USER_IN[4]} & ((~status[5] || status[6]) ? 2'b00 : 2'b11); // FIXME: These may be backwards.
 wire snac_il_in = (status[6] ? USER_IN[4] : USER_IN[2]);
@@ -1049,6 +1055,16 @@ always_comb begin
 		default: header_type1 = 8'd0;
 	endcase
 
+	robor[3] = ~($signed(joyar_0[7:0]) > 63);
+	robor[2] = ~($signed(joyar_0[7:0]) < -63);
+	robor[1] = ~($signed(joyar_0[15:8]) > 63);
+	robor[0] = ~($signed(joyar_0[15:8]) < -63);
+	
+	robol[3] = ~($signed(joya_0[7:0]) > 63);
+	robol[2] = ~($signed(joya_0[7:0]) < -63);
+	robol[1] = ~($signed(joya_0[15:8]) > 63);
+	robol[0] = ~($signed(joya_0[15:8]) < -63);
+
 	is_snac0 = porta_type == snac_type;
 	is_snac1 = portb_type == snac_type;
 	USER_OUT = '1;
@@ -1077,6 +1093,7 @@ always_comb begin
 		7: begin PAin[7:4] = st_mouse[3:0]; ilatch[0] = ~st_mouse[5]; idump[1:0] = st_mouse[6:5]; end
 		8: begin PAin[7:4] = amiga_mouse[3:0]; ilatch[0] = ~amiga_mouse[5]; idump[1:0] = amiga_mouse[6:5]; end
 		9: begin idump[1:0] = {joya[5], joya[9]}; end
+		10: begin PAin[7:4] = robol; end
 		snac_type: begin PAin[7:4] = snac_pa_in; ilatch[0] = snac_il_in; idump[1:0] = snac_id_in[1:0]; end
 		default: ;
 	endcase
@@ -1091,6 +1108,7 @@ always_comb begin
 		7: begin PAin[3:0] = st_mouse[3:0]; ilatch[1] = ~st_mouse[5]; idump[3:2] = st_mouse[6:5]; end
 		8: begin PAin[3:0] = amiga_mouse[3:0]; ilatch[1] = ~amiga_mouse[5]; idump[3:2] = amiga_mouse[6:5]; end
 		9: begin idump[3:2] = {joyb[5], joyb[9]}; end
+		10: begin PAin[3:0] = robor; end
 		snac_type: if (~is_snac0) begin PAin[3:0] = snac_pa_in; ilatch[1] = snac_il_in; idump[3:2] = snac_id_in[1:0]; end
 		default: ;
 	endcase
@@ -1225,6 +1243,7 @@ video_mixer #(.LINE_LENGTH(372), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
 	.HBlank(hb_cofi),
 	.VSync(vs_cofi),
 	.VBlank(vb_cofi),
+	.freeze_sync(),
 
 	.R((gun_en & gun_target) ? 8'd255 : r_cofi),
 	.G((gun_en & gun_target) ? 8'd0 : g_cofi),
@@ -1252,10 +1271,10 @@ dpram_dc #(.widthad_a(11)) hsc_ram
 	.q_a       (hsc_ram_dout),
 
 	.clock_b   (clk_sys),
-	.address_b ({sd_lba[1:0],sd_buff_addr}),
+	.address_b ({sd_lba[0][1:0],sd_buff_addr}),
 	.data_b    (sd_buff_dout),
 	.wren_b    (sd_buff_wr & sd_ack),
-	.q_b       (sd_buff_din)
+	.q_b       (sd_buff_din[0])
 );
 
 wire downloading = cart_download;
@@ -1288,24 +1307,24 @@ always @(posedge clk_sys) begin : save_block
 		if((~old_load & bk_load) | (~old_save & bk_save)) begin
 			bk_state <= 1;
 			bk_loading <= bk_load;
-			sd_lba <= 0;
+			sd_lba[0] <= 0;
 			sd_rd <=  bk_load;
 			sd_wr <= ~bk_load;
 		end
 		if(old_downloading & ~downloading & |img_size & bk_ena) begin
 			bk_state <= 1;
 			bk_loading <= 1;
-			sd_lba <= 0;
+			sd_lba[0] <= 0;
 			sd_rd <= 1;
 			sd_wr <= 0;
 		end
 	end else begin
 		if(old_ack & ~sd_ack) begin
-			if(&sd_lba[1:0]) begin
+			if(&sd_lba[0][1:0]) begin
 				bk_loading <= 0;
 				bk_state <= 0;
 			end else begin
-				sd_lba <= sd_lba + 1'd1;
+				sd_lba[0] <= sd_lba[0] + 1'd1;
 				sd_rd  <=  bk_loading;
 				sd_wr  <= ~bk_loading;
 			end

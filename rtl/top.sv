@@ -9,6 +9,7 @@
 module Atari7800(
 	input  logic        clk_sys,
 	input  logic        reset,
+	input  logic        pause,
 	output logic  [7:0] RED,
 	output logic  [7:0] GREEN,
 	output logic  [7:0] BLUE,
@@ -30,6 +31,7 @@ module Atari7800(
 	input logic         show_overscan,
 	input logic         bypass_bios,
 	input logic         tia_mode,
+	input logic         cpu_driver,
 
 	input  logic [7:0]  cart_xm,
 	output logic        cart_read,
@@ -39,14 +41,23 @@ module Atari7800(
 	input  logic [15:0] cart_flags,
 	input  logic  [7:0] cart_save,
 	input  logic [31:0] cart_size,
+	output logic  [7:0] cart_din,
 	output logic        RW,
 	input  logic        loading,
+	
+	output       [17:0] cartram_addr,
+	output              cartram_wr,
+	output              cartram_rd,
+	output       [7:0]  cartram_wrdata,
+	input        [7:0]  cartram_data,
 
 	// Tia inputs
 	input  logic  [3:0] idump,
 	output logic  [3:0] i_out,
 	input  logic  [1:0] ilatch,
-
+	input  logic        tia_stab,
+	output logic        tia_f1,
+	output logic        tia_pal,
 	output logic        tia_en,
 
 	// Riot inputs
@@ -55,22 +66,32 @@ module Atari7800(
 	output logic  [7:0] PAout,
 	output logic  [7:0] PBout,
 	output logic        PAread,
+
 	// 2600 Cart force flags based on detection
-	input logic [3:0]  force_bs,
+	input logic [4:0]  force_bs,
 	input logic        sc,
 	input logic [7:0]  clearval,
+	input logic [7:0]  random,
+	input logic [1:0]  tape_in,
 	output logic       tia_hsync,
 	input  logic       use_stereo,
 	input [10:0]       ps2_key,
-	input              pokey_irq
+	input              pokey_irq,
+	input              decomb,
+	input [4:0]        mapper,
+	input              pal_load,
+	input [9:0]        pal_addr,
+	input              pal_wr,
+	input [7:0]        pal_data,
+	input              blend,
+	input              ar_control,
+	output [3:0]       i_read
 );
 
 	/////////////
 	// Signals //
 	/////////////
 
-
-	// MARIA Signals
 	logic           NMI_n;
 	logic           maria_RDY;
 	logic           halt_n;
@@ -102,18 +123,27 @@ module Atari7800(
 	logic           cpu_rwn;
 	logic [15:0]    covox_r, covox_l;
 	logic [15:0]    last_address;
-	logic           pclk1, pclk0;
+	logic           pclk1, pclk0, pclk1_m, pclk0_m, pclk1_t, pclk0_t;
+	logic           tia_clk_x2;
+	logic           read_2600;
+	logic [1:0]     pause_clock;
+	logic [17:0]    cartram_addr78, cartram_addr26;
+	logic           cartram_wr78, cartram_wr26;
+	logic [7:0]     cartram_wrdata78, cartram_wrdata26;
+	logic           cartram_rd78, cartram_rd26;
+	logic [7:0]     cartram_data_bram;
 
 	assign RDY = maria_RDY && tia_RDY;
 	assign cpu_halt_n = (ctrl_writes == 2'd2) ? halt_n : 1'b1;
-	assign cart_read = cart_read_flag & mclk1;
-	assign cart_addr_out = cart_7800_addr_out; //tia_en ? cart_2600_addr_out : cart_7800_addr_out;
-	assign cart_DB_out = cart_7800_DB_out; //tia_en ? cart_2600_DB_out : cart_7800_DB_out;
+	assign cart_read = pause ? &pause_clock : (tia_en ? read_2600 : (cart_read_flag & mclk1));
+	assign cart_addr_out = tia_en ? cart_2600_addr_out : cart_7800_addr_out;
+	assign cart_DB_out = tia_en ? cart_2600_DB_out : cart_7800_DB_out;
 	assign PAread = cs_riot && ~|AB[4:0] && RW && pclk0;
 
 	// Track the open bus since FPGA's don't use bidirectional logic internally
 	always_ff @(posedge clk_sys) begin
-		open_bus <= /*maria_AB_out ? 8'd0 :*/(~RW ? write_DB : read_DB);
+		pause_clock <= pause_clock + 1'd1;
+		open_bus <= (~RW ? write_DB : read_DB);
 		last_address <= AB;
 	end
 
@@ -135,6 +165,14 @@ module Atari7800(
 			2'b11 : AB = cpu_AB & maria_AB_out;
 		endcase
 		RW = cpu_released ? 1'b1 : cpu_rwn;
+		
+		if (cpu_driver && tia_en) begin
+			pclk0 = pclk0_t;
+			pclk1 = pclk1_t;
+		end else begin
+			pclk0 = pclk0_m;
+			pclk1 = pclk1_m;
+		end
 	end
 
 	assign dout = write_DB;
@@ -166,8 +204,10 @@ module Atari7800(
 	logic [3:0] maria_luma, maria_chroma;
 
 	maria maria_inst(
+		.ce             (~pause),
 		.mclk0          (mclk0),
 		.mclk1          (mclk1),
+		.tia_clk_x2     (tia_clk_x2),
 		.AB_in          (AB),
 		.AB_out         (maria_AB_out),
 		.drive_AB       (maria_drive_AB),
@@ -179,9 +219,9 @@ module Atari7800(
 		.DB_out         (maria_DB_out),
 		.reset          (reset),
 		.clk_sys        (clk_sys),
-		.pclk0          (pclk0),
-		.pclk1          (pclk1),
-		.pclk2          (pclk0),
+		.pclk0          (pclk0_m),
+		.pclk1          (pclk1_m),
+		.pclk2          (pclk0_m),
 		.RW             (RW),
 		.maria_en       (maria_en),
 		.YC             ({maria_chroma, maria_luma}),
@@ -204,12 +244,15 @@ module Atari7800(
 	logic [3:0] tia_chroma;
 	logic [2:0] tia_luma;
 	logic tia_pix_ce;
+	logic cart_ce_2600;
 
-	TIA2 tia_inst
+	TIA tia_inst
 	(
 		.clk            (clk_sys),
-		.ce             (mclk1),     // Clock enable for CLK generation only
-		.phi0           (),
+		.ce             (tia_clk_x2),     // Clock enable for CLK generation only
+		.is_7800        (~(cpu_driver && tia_en)),
+		.phi0           (pclk0_t),
+		.phi1           (pclk1_t),
 		.phi2           (pclk0),
 		.RW_n           (RW),
 		.rdy            (tia_RDY),
@@ -235,9 +278,14 @@ module Atari7800(
 		.hgap           (tia_hblank),
 		.vsync          (tia_vsync),
 		.hsync          (tia_hsync),
-		.phi2_gen       (),
 		.phi1_in        (pclk1),
-		.open_bus       (open_bus)
+		.open_bus       (open_bus),
+		.cart_ce        (cart_ce_2600),
+		.decomb         (decomb),
+		.is_pal         (tia_pal),
+		.stabilize      (tia_stab),
+		.is_f1          (tia_f1),
+		.paddle_read    (i_read)
 	);
 
 	video_mux mux
@@ -259,6 +307,10 @@ module Atari7800(
 		.tia_pix_ce     (tia_pix_ce),
 		.is_maria       (maria_en),
 		.pal_temp       (pal_temp),
+		.pal_load       (pal_load),
+		.pal_data       (pal_data),
+		.pal_addr       (pal_addr),
+		.pal_wr         (pal_wr),
 		.is_PAL         (PAL),
 		.hblank         (HBlank),
 		.vblank         (VBlank),
@@ -267,7 +319,8 @@ module Atari7800(
 		.red            (RED),
 		.green          (GREEN),
 		.blue           (BLUE),
-		.pix_ce         (ce_pix)
+		.pix_ce         (ce_pix),
+		.blend          (blend)
 	);
 
 	// Audio output is non-linear, and this table represents the proper compressed values of
@@ -288,14 +341,17 @@ module Atari7800(
 		16'h50D6, 16'h589C, 16'h5FFF, 16'h6705, 16'h6DB6, 16'h7416, 16'h7A2D, 16'h7FFF
 	};
 
-	wire [5:0] aud_index = audv0 + audv1; // FIXME: should this ever hit > index 30?
+	logic tape_audio;
+
+	wire [5:0] aud_index = audv0 + audv1;
 	wire [15:0] tia_r = (use_stereo ? audio_lut_single[audv0] : audio_lut[aud_index]);
 	wire [15:0] tia_l = (use_stereo ? audio_lut_single[audv1] : audio_lut[aud_index]);
 
-	assign AUDIO_R = tia_r + pokey_audio_r + ym_audio_r + covox_r;
-	assign AUDIO_L = tia_l + pokey_audio_l + ym_audio_l + covox_l;
+	assign AUDIO_R = tia_r + pokey_audio_r + ym_audio_r + covox_r + {tape_audio, 12'd0};
+	assign AUDIO_L = tia_l + pokey_audio_l + ym_audio_l + covox_l + {tape_audio, 12'd0};
 
-	M6532 #(.init_7800(1)) riot_inst_2
+	logic [7:0] ar_ram_addr;
+	M6532 #(.init_7800(1)) riot_inst
 	(
 		.clk          (clk_sys),
 		.ce           (pclk0),     // PHI 2 Clock enable
@@ -330,6 +386,7 @@ module Atari7800(
 		.is_halted    (cpu_released)
 	);
 
+
 	ctrl_reg ctrl
 	(
 		.clk          (clk_sys),
@@ -347,54 +404,94 @@ module Atari7800(
 		.tia_mode     (tia_mode)
 	);
 
+	assign cartram_wr = tia_en ? cartram_wr26 : cartram_wr78;
+	assign cartram_rd = tia_en ? cartram_rd26 : cartram_rd78;
+	assign cartram_addr = tia_en ? cartram_addr26 : cartram_addr78;
+	assign cartram_wrdata = tia_en ? cartram_wrdata26 : cartram_wrdata78;
+
+	logic [16:0] reset_addr; // Clear ram while reset is held
+	always @(posedge clk_sys) begin :reset_cart
+		logic old_reset;
+		old_reset <= reset;
+		reset_addr <= (reset && ~old_reset) ? 16'd0 : reset_addr + 1'd1;
+	end
+
+	spram #(.addr_width(17), .mem_name("CART")) cart_ram
+	(
+		.clock   (clk_sys),
+		.address (reset ? reset_addr : cartram_addr),
+		.data    (reset ? 8'd0 : cartram_wrdata),
+		.wren    (reset ? 1'd1 : cartram_wr),
+		.q       (cartram_data_bram),
+		.cs      (1)
+	);
+
 	cart cart
 	(
-		.clk_sys      (clk_sys),
-		.pclk0        (pclk0),
-		.pclk1        (pclk1),
-		.IRQ_n        (IRQ_n),
-		.halt_n       (cpu_halt_n),
-		.reset        (reset),
-		.address_in   (AB[15:0]),
-		.din          (write_DB),
-		.rom_din      (cart_out),
-		.cart_flags   (cart_flags),
-		.cart_size    (cart_size),
-		.cart_save    (cart_save),
-		.cart_cs      (cs_cart),
-		.cart_xm      (cart_xm),
-		.cart_read    (cart_read_flag),
-		.hsc_en       (hsc_en),
-		.hsc_ram_cs   (hsc_ram_cs),
-		.hsc_ram_din  (hsc_ram_dout),
-		.rw           (RW),
-		.dout         (cart_7800_DB_out),
-		.pokey_audio_r(pokey_audio_r),
-		.pokey_audio_l(pokey_audio_l),
-		.ym_audio_r   (ym_audio_r),
-		.ym_audio_l   (ym_audio_l),
-		.rom_address  (cart_7800_addr_out),
-		.open_bus     (open_bus),
-		.covox_r      (covox_r),
-		.covox_l      (covox_l),
-		.ps2_key      (ps2_key),
-		.pokey_irq_en (pokey_irq)
+		.clk_sys        (clk_sys),
+		.pclk0          (pclk0),
+		.pclk1          (pclk1),
+		.IRQ_n          (IRQ_n),
+		.halt_n         (cpu_halt_n),
+		.reset          (reset),
+		.address_in     (AB[15:0]),
+		.din            (write_DB),
+		.rom_din        (cart_out),
+		.cart_flags     (cart_flags),
+		.cart_size      (cart_size),
+		.cart_save      (cart_save),
+		.cart_cs        (cs_cart),
+		.cart_xm        (cart_xm),
+		.cart_read      (cart_read_flag),
+		.cartram_addr   (cartram_addr78),
+		.cartram_wr     (cartram_wr78),
+		.cartram_rd     (cartram_rd78),
+		.cartram_wrdata (cartram_wrdata78),
+		.cartram_data   (cartram_data_bram),
+		.hsc_en         (hsc_en),
+		.hsc_ram_cs     (hsc_ram_cs),
+		.hsc_ram_din    (hsc_ram_dout),
+		.rw             (RW),
+		.dout           (cart_7800_DB_out),
+		.pokey_audio_r  (pokey_audio_r),
+		.pokey_audio_l  (pokey_audio_l),
+		.ym_audio_r     (ym_audio_r),
+		.ym_audio_l     (ym_audio_l),
+		.rom_address    (cart_7800_addr_out),
+		.open_bus       (open_bus),
+		.covox_r        (covox_r),
+		.covox_l        (covox_l),
+		.ps2_key        (ps2_key),
+		.pokey_irq_en   (pokey_irq)
 	);
+
+	assign cart_2600_addr_out[24:19] = '0;
+	assign cart_din = cpu_rwn ? read_DB : write_DB;
 
 	cart2600 cart2600
 	(
-		.reset        (reset),
-		.clk          (clk_sys),
-		.ph0_en       (pclk0),
-		.cpu_d_out    (cart_2600_DB_out),
-		.cpu_d_in     (write_DB),
-		.cpu_a        (AB[12:0]),
-		.sc           (sc),
-		.force_bs     (force_bs),
-		.rom_a        (cart_2600_addr_out),
-		.rom_do       (cart_out),
-		.rom_size     (cart_size),
-		.open_bus     (open_bus)
+		.d_out          (cart_2600_DB_out),
+		.d_in           (cart_din),
+		.a_in           (AB[12:0]),
+		.reset          (reset),
+		.clk            (clk_sys),
+		.ce             (cart_ce_2600),
+		.phi1           (pclk1),
+		.sc             (sc),
+		.mapper         (|mapper ? mapper : force_bs),
+		.rom_do         (cart_out),
+		.rom_size       (cart_size),
+		.rom_a          (cart_2600_addr_out[18:0]),
+		.rom_read       (read_2600),
+		.cartram_addr   (cartram_addr26),
+		.cartram_wr     (cartram_wr26),
+		.cartram_rd     (cartram_rd26),
+		.cartram_wrdata (cartram_wrdata26),
+		.cartram_data   (cartram_data_bram),
+		.oe             (),
+		.open_bus       (open_bus),
+		.tape_in        (tape_in),
+		.tape_audio     (tape_audio)
 	);
 
 endmodule
@@ -426,7 +523,7 @@ module ctrl_reg
 			tia_en_out <= 0;
 			wrote_once <= 0;
 			writes <= 0;
-		end	else if (bypass_bios && ~wrote_once) begin
+		end else if (bypass_bios && ~wrote_once) begin
 			lock_out <= tia_mode ? 1'd1 : 1'd0;
 			maria_en_out <= tia_mode ? 1'd0 : 1'd1;
 			bios_en_out <= 1;
@@ -463,7 +560,7 @@ module M6502C
 
 	logic cpu_halt_n = 1;
 	logic rdy_delay = 1;
-
+	
 	T65 cpu (
 		.mode (0),
 		.BCD_en(1),

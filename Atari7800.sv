@@ -160,8 +160,6 @@ module emu
 	input         OSD_STATUS
 );
 
-assign ADC_BUS   = 'Z;
-
 assign BUTTONS   = 0;
 
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
@@ -203,12 +201,19 @@ pll pll
 // 14.187576 = PAL Master Clock
 
 logic reset;
-always @(posedge clk_vid)
-	reset <= RESET | buttons[1] | status[0] | ioctl_download;
+logic use_tape;
+always @(posedge clk_vid) begin
+	if (status[48])
+		use_tape <= 1;
+	if (cart_download)
+		use_tape <= 0;
+	reset <= RESET | buttons[1] | status[0] | cart_download | bios_download || status[48];
+end
 
 
 wire cart_download = ioctl_download & (ioctl_index[5:0] == 6'd1);
 wire bios_download = ioctl_download & ((ioctl_index[5:0] == 6'd0) && (ioctl_index[7:6] == 0)) || (ioctl_index[5:0] == 2);
+wire pal_download  = ioctl_download & (ioctl_index[5:0] == 6'd3);
 
 reg old_cart_download;
 
@@ -217,17 +222,17 @@ reg old_cart_download;
 // 0         1         2         3          4         5         6
 // 01234567890123456789012345678901 23456789012345678901234567890123
 // 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
-// XXXXXXXXXXXXXXXXXXXXX XXXXXXXXXX XXX XXXXXXXXXXX
+// XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXX      XXXXXXXX
 
 `include "build_id.v"
 parameter CONF_STR = {
 	"ATARI7800;;",
-	"FS1,A78;",
+	"FS1,A78A26BIN;",
 	"FC2,ROMBIN,Load BIOS;",
 	"-;",
 	"OFG,Region,Auto,NTSC,PAL;",
-	"OC,Difficulty Right,Right,Left;",
-	"OD,Difficulty Left,Right,Left;",
+	"OC,Difficulty Right,A,B;",
+	"OD,Difficulty Left,A,B;",
 	"-;",
 	"P1,Audio & Video;",
 	"P1-;",
@@ -242,40 +247,62 @@ parameter CONF_STR = {
 	"P1OT,Show Overscan,No,Yes;",
 	"P1OE,Show Border,Yes,No;",
 	"P1OK,Composite Blending,No,Yes;",
-	"P1OUV,Temperature Colors,Warm,Cool,Hot;",
+	"P1OUV,Temperature Colors,Warm,Cool,Hot,Custom;",
+	"H3P1FC3,PAL,Load Palette;",
 	"P2,Peripherals;",
 	"P2OIJ,High Score Cart,Auto,On,Off;",
 	"P2O7,Swap Joysticks,No,Yes;",
 	"P2-;",
-	"P2o69,Port1 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,SNAC;",
-	"P2oAD,Port2 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,SNAC;",
+	"P2o69,Port1 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,BoosterGrip,SNAC;",
+	"P2oAD,Port2 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,BoosterGrip,SNAC;",
 	"h1P2O5,SNAC Analog,Yes,No;",
 	"h1P2O6,Sega Phaser Mode,No,Yes;",
+	"P2oH,Swap Paddle A<->B,No,Yes;",
 	"P2oE,Quadtari,Off,On;",
 	"P2-;",
 	"P2o01,Gun Control,Joy1,Joy2,Mouse;",
 	"P2o2,Gun Fire,Joy,Mouse;",
 	"P2o45,Cross,Small,Medium,Big,None;",
+	"D2P4,Atari2600;",
+	"D2P4oT,Flickerblend,Off,On;",
+	"D2P4oV,Stabilize Video,On,Off;",
+	"D2P4oF,De-comb,Off,On;",
+	"D2P4oU,Black & White,Off,On;",
+	"D2P4oOS,Bankswitching,Auto,F8,F6,FE,E0,3F,F4,P2,FA,CV,2K,UA,E7,F0,32,AR,3E,SB,WD,EF;",
+	"D2P4-;",
+	"D2P4rG,Load Tape From ADC;",
 	"P3,Advanced;",
 	"P3OH,Bypass Bios,Yes,No;",
 	"P3O1,Clear Memory,Zero,Random;",
 	"P3O7,Pokey IRQ Enabled,No,Yes;",
+	"D2P3OL,CPU Driver,TIA,Maria;",
 	"-;",
-	"R0,Reset;",
-	"J,Fire1,Fire2,Pause,Select,Start,Paddle;",
-	"jn,A|P,B,R,Select,Start,L;",
-	"jp,B|P,Y,R,Select,Start,L;",
+	"o3,Pause Core on OSD,Off,On;",
+	"-;",
+	"R0,Hard Reset;",
+	"J,Fire1,Fire2,Pause/B&W,Select,Reset(Start),Paddle Button,Diff L,Diff R,Halt;",
+	"jn,A,B,R,Select,Start,X|P;",
+	"jp,B,Y,R,Select,Start,X|P;",
 	"I,",
 	"Paddle 1A Assigned,",
 	"Paddle 1B Assigned,",
 	"Paddle 2A Assigned,",
-	"Paddle 2B Assigned;",
+	"Paddle 2B Assigned,",
+	"Difficulty Right: A,",
+	"Difficulty Right: B,",
+	"Difficulty Left: A,",
+	"Difficulty Left: B,",
+	"Black and White: Off,",
+	"Black and White: On,",
+	"Paddle Mode Enabled,",
+	"Joystick Mode Enabled;",
 	"V,v",`BUILD_DATE
 };
 
 
 wire  [1:0] buttons;
-wire [63:0] status;
+logic [63:0] status, status_in;
+wire         status_set;
 wire        forced_scandoubler;
 wire        img_mounted;
 wire        img_readonly;
@@ -306,59 +333,64 @@ logic [10:0] ps2_key;
 logic [15:0] ps2_mouse_ext;
 logic is_snac0, is_snac1;
 logic info_req;
+logic [7:0] info;
 logic [1:0] last_paddle;
+logic pad0_assigned, pad1_assigned, pad2_assigned, pad3_assigned;
+logic old_auto_paddle, auto_paddle;
 
 hps_io #(.STRLEN(($size(CONF_STR)>>3))) hps_io
 (
-	.clk_sys(clk_sys),
-	.HPS_BUS(HPS_BUS),
-	.conf_str(CONF_STR),
+	.clk_sys            (clk_sys),
+	.HPS_BUS            (HPS_BUS),
+	.conf_str           (CONF_STR),
 
-	.buttons(buttons),
-	.forced_scandoubler(forced_scandoubler),
-	.gamma_bus(gamma_bus),
+	.buttons            (buttons),
+	.forced_scandoubler (forced_scandoubler),
+	.gamma_bus          (gamma_bus),
 
-	.joystick_0(joy0),
-	.joystick_1(joy1),
-	.joystick_2(joy2),
-	.joystick_3(joy3),
-	.joystick_analog_0(joya_0),
-	.joystick_analog_1(joya_1),
-	.joystick_analog_2(joya_2),
-	.joystick_analog_3(joya_3),
-	.paddle_0(pd_0),
-	.paddle_1(pd_1),
-	.paddle_2(pd_2),
-	.paddle_3(pd_3),
+	.joystick_0         (joy0),
+	.joystick_1         (joy1),
+	.joystick_2         (joy2),
+	.joystick_3         (joy3),
+	.joystick_analog_0  (joya_0),
+	.joystick_analog_1  (joya_1),
+	.joystick_analog_2  (joya_2),
+	.joystick_analog_3  (joya_3),
+	.paddle_0           (pd_0),
+	.paddle_1           (pd_1),
+	.paddle_2           (pd_2),
+	.paddle_3           (pd_3),
 
-	.info_req(info_req),
-	.info({1'b0,last_paddle} + 3'd1),
+	.info_req           (info_req),
+	.info               (info),
 
-	.ps2_mouse(ps2_mouse),
-	.ps2_mouse_ext(ps2_mouse_ext),
-	.ps2_key (ps2_key),
-	.status(status),
-	.status_menumask({(is_snac0 | is_snac1),en216p}),
+	.ps2_mouse          (ps2_mouse),
+	.ps2_mouse_ext      (ps2_mouse_ext),
+	.ps2_key            (ps2_key),
+	.status             (status),
+	.status_set         (status_set),
+	.status_in          (status_in),
+	.status_menumask    ({status[31:30] != 3,~tia_en,(is_snac0 | is_snac1),en216p}),
 
-	.ioctl_addr(ioctl_addr),
-	.ioctl_dout(ioctl_dout),
-	.ioctl_wr(ioctl_wr),
-	.ioctl_download(ioctl_download),
-	.ioctl_index(ioctl_index),
-	.ioctl_wait(ioctl_wait),
+	.ioctl_addr         (ioctl_addr),
+	.ioctl_dout         (ioctl_dout),
+	.ioctl_wr           (ioctl_wr),
+	.ioctl_download     (ioctl_download),
+	.ioctl_index        (ioctl_index),
+	.ioctl_wait         (ioctl_wait),
 
-	.sd_lba(sd_lba),
-	.sd_rd(sd_rd),
-	.sd_wr(sd_wr),
-	.sd_ack(sd_ack),
-	.sd_buff_addr(sd_buff_addr),
-	.sd_buff_dout(sd_buff_dout),
-	.sd_buff_din(sd_buff_din),
-	.sd_buff_wr(sd_buff_wr),
+	.sd_lba             (sd_lba),
+	.sd_rd              (sd_rd),
+	.sd_wr              (sd_wr),
+	.sd_ack             (sd_ack),
+	.sd_buff_addr       (sd_buff_addr),
+	.sd_buff_dout       (sd_buff_dout),
+	.sd_buff_din        (sd_buff_din),
+	.sd_buff_wr         (sd_buff_wr),
 
-	.img_mounted(img_mounted),
-	.img_readonly(img_readonly),
-	.img_size(img_size)
+	.img_mounted        (img_mounted),
+	.img_readonly       (img_readonly),
+	.img_size           (img_size)
 );
 
 ////////////////////////////  SYSTEM  ///////////////////////////////////
@@ -393,7 +425,9 @@ logic [7:0] hsc_ram_dout, din;
 logic hsc_ram_cs;
 logic tia_mode;
 logic ce_pix_raw;
-wire [3:0] force_bs;
+logic [7:0] cart_din;
+logic cart_rw;
+wire [4:0] force_bs;
 wire sc;
 
 logic [15:0] rnd;
@@ -401,19 +435,42 @@ wire PAread;
 
 lfsr #(.N(15)) random(rnd);
 
-wire region_select = ~|status[16:15] ? cart_region[0] : (status[16] ? 1'b1 : 1'b0);
+wire region_select = ~|status[16:15] ? (tia_en ? tia_pal : cart_region[0]) : status[16];
 logic [3:0] iout;
 logic tia_hsync;
+logic tia_pal, tia_f1;
 logic [7:0] rval;
 
-always @(posedge clk_sys)
+always @(posedge clk_sys) begin
 	rval <= rnd[7:0];
+	old_cart_download <= cart_download;
+end
+logic tape_adc;
+logic tape_adc_act;
+
+ltc2308_tape #(.CLK_RATE(32000000)) ltc2308_tape
+(
+  .clk(clk_sys),
+  .ADC_BUS(ADC_BUS),
+  .dout(tape_adc),
+  .active(tape_adc_act)
+);
+
+wire [17:0] cartram_addr;
+wire cartram_wr;
+wire [7:0] cartram_wrdata;
+wire cartram_rd;
+wire [7:0] cartram_data;
+wire cartram_busy;
+logic [3:0] i_read;
+logic halted;
 
 Atari7800 main
 (
 	.clk_sys      (clk_sys),
 	.reset        (reset),
-	.loading      (ioctl_download),
+	.loading      (cart_download || bios_download),
+	.pause        ((status[35] && OSD_STATUS) || halted),
 
 	// Video
 	.RED          (R),
@@ -428,7 +485,7 @@ Atari7800 main
 	.show_overscan(status[29]),
 	.PAL          (region_select),
 	.pal_temp     (status[31:30]),
-	.tia_mode     (tia_mode),
+	.tia_mode     (tia_mode && ~status[17]),
 	.bypass_bios  (~status[17]),
 	.pokey_irq    (status[7]),
 	.hsc_en       (~|status[19:18] && (|cart_save || cart_xm[0]) ? 1'b1 : status[18]),
@@ -440,14 +497,21 @@ Atari7800 main
 	.AUDIO_L      (AUDIO_L), // 16 bit
 
 	// Cart Interface
-	.cart_out     (cart_loaded ? cart_data_sd : cart_data),
+	.cart_out     (cart_download ? ioctl_dout[7:0] : (cart_loaded ? cart_data_sd : cart_data)),
 	.cart_read    (cart_read),
 	.cart_size    (cart_size),
 	.cart_addr_out(cart_addr),
 	.cart_flags   (cart_is_7800 ? cart_flags[15:0] : 16'd0),
 	.cart_save    (cart_save),
+	.cart_din     (cart_din),
 	.cart_xm      (cart_is_7800 ? cart_xm : 8'h0),
 	.ps2_key      (ps2_key),
+
+	.cartram_addr   (cartram_addr),
+	.cartram_wr     (cartram_wr),
+	.cartram_rd     (cartram_rd),
+	.cartram_wrdata (cartram_wrdata),
+	.cartram_data   (cartram_data),
 
 	// BIOS
 	.bios_out     (bios_data),
@@ -458,10 +522,14 @@ Atari7800 main
 	// Tia
 	.idump        (idump),  // Paddle {A0, B0, A1, B1}
 	.ilatch       (ilatch), // Buttons {FireB, FireA}
-	.i_out         (iout),
+	.i_out        (iout),
 	.tia_en       (tia_en),
 	.tia_hsync    (tia_hsync),
 	.use_stereo   (status[4]),
+	.cpu_driver   (~status[21]),
+	.tia_f1       (tia_f1),
+	.tia_pal      (tia_pal),
+	.tia_stab     (status[63]),
 
 	// RIOT
 	.PAin         (PAin),  // Direction {RA, LA, DA, UA, RB, LB, DB, UB}
@@ -471,9 +539,21 @@ Atari7800 main
 	.PAread       (PAread),
 
 	// 2600 Cart Flags from detect2600
-	.force_bs     (force_bs),
+	.force_bs     (use_tape ? BANKAR : force_bs),
 	.sc           (sc),
-	.clearval     (status[1] ? rval : 8'h00)
+	.clearval     (status[1] ? rval : 8'h00),
+	.random       (rval),
+	.decomb       (status[47]),
+	.mapper       (status[60:56]),
+	.tape_in      ({use_tape, tape_adc}),
+
+	// Palette loading
+	.pal_load     (pal_download),
+	.pal_addr     (ioctl_addr[9:0]),
+	.pal_wr       (ioctl_wr),
+	.pal_data     (ioctl_dout[7:0]),
+	.blend        (status[61]),
+	.i_read       (i_read)
 );
 
 ////////////////////////////  MEMORY  ///////////////////////////////////
@@ -482,7 +562,8 @@ logic [14:0] bios_mask;
 detect2600 detect2600
 (
 	.clk        (clk_sys),
-	.addr       (ioctl_addr[12:0]),
+	.addr       (ioctl_addr[15:0]),
+	.reset      (~old_cart_download && cart_download),
 	.cart_size  (cart_size),
 	.enable     (ioctl_wr & cart_download),
 	.data       (ioctl_dout),
@@ -584,21 +665,21 @@ sdram sdram
 
 	// cpu/chipset interface
 	.ch0_addr   (cart_download ? cart_write_addr : cart_addr),
-	.ch0_wr     (ioctl_wr & cart_download),
-	.ch0_din    (ioctl_dout),
+	.ch0_wr     (cart_download ? (ioctl_wr & cart_download) : 1'b0),
+	.ch0_din    (cart_download ? ioctl_dout : cart_din),
 	.ch0_rd     (cart_read & ~cart_download & ~reset),
 	.ch0_dout   (cart_data_sd),
 	.ch0_busy   (cart_busy),
 
-	.ch1_addr   (  ),
-	.ch1_wr     (  ),
-	.ch1_din    (  ),
-	.ch1_rd     (  ),
-	.ch1_dout   (  ),
-	.ch1_busy   ( ),
+	.ch1_addr   (/*cartram_addr*/),
+	.ch1_wr     (/*cartram_wr*/),
+	.ch1_din    (/*cartram_wrdata*/),
+	.ch1_rd     (/*cartram_rd*/),
+	.ch1_dout   (/*cartram_data*/),
+	.ch1_busy   (/*cartram_busy*/),
 
 	// reserved for backup ram save/load
-	.ch2_addr   ( ),
+	.ch2_addr   (  ),
 	.ch2_wr     (  ),
 	.ch2_din    (  ),
 	.ch2_rd     (  ),
@@ -614,17 +695,37 @@ sdram sdram
 // 7800: Bits PB 0,1,3,6,7 are used for reset, select, pause, left diff, right diff
 // 7800: Bits PB 2 & 4 are used for output to select 2 button mode.
 
-assign last_paddle = '0;
-assign info_req = '0;
+assign info_req = pad0_assigned | pad1_assigned | pad2_assigned |
+	pad3_assigned | toggle_bw | toggle_ldiff | toggle_rdiff | toggle_paddle;
+
+always_comb begin
+	info = 8'd0;
+	if (pad0_assigned)
+		info = 8'd1;
+	if (pad1_assigned)
+		info = 8'd2;
+	if (pad2_assigned)
+		info = 8'd3;
+	if (pad3_assigned)
+		info = 8'd4;
+	if (toggle_rdiff)
+		info = status[12] ? 8'd5: 8'd6;
+	if (toggle_ldiff)
+		info = status[13] ? 8'd7: 8'd8;
+	if (toggle_bw)
+		info = status[62] ? 8'd9: 8'd10;
+	if (toggle_paddle)
+		info = (auto_paddle ? 8'd11 : 8'd12);
+end
 
 assign PBin[7] = ~status[12];              // Right diff
 assign PBin[6] = ~status[13];              // Left diff
 assign PBin[5] = PBout[5];                 // Unused (Not connected)
 assign PBin[4] = PBout[4];                 // Unused (used for 2 button sensing)
-assign PBin[3] = (~joya[6] & ~joyb[6]);    // Pause/B&W
+assign PBin[3] = tia_en ? ~status[62] : (~joya[6] & ~joyb[6]);    // Pause/B&W
 assign PBin[2] = PBout[2];                 // Unused (used for 2 button sensing)
-assign PBin[1] = (~joya[7] & ~joyb[7]);    // Select
-assign PBin[0] = (~joya[8] & ~joyb[8]);    // Start/Reset
+assign PBin[1] = (~joya[7] & ~joyb[7] & ~keyselect);    // Select
+assign PBin[0] = (~joya[8] & ~joyb[8] & ~keystart);     // Start/Reset
 
 wire [7:0] porta_type, portb_type;
 wire [1:0] gun_mode = status[33:32];
@@ -643,7 +744,8 @@ lightgun lightgun
 	.MOUSE(ps2_mouse),
 	.MOUSE_XY(gun_mode[1]),
 
-	.LIGHT (|{R, G, B}),
+	.LIGHT (|R[7:4] || |G[7:4] || |B[7:4]),
+	.H_WIDTH(tia_en ? 9'd160 : 9'd372),
 
 	.JOY_X(~|gun_mode ? joya_0[7:0] : joya_1[7:0]),
 	.JOY_Y(~|gun_mode ? joya_0[15:8] : joya_1[15:8]),
@@ -655,7 +757,8 @@ lightgun lightgun
 
 	.BTN_MODE(gun_btn_mode),
 	.SIZE(status[37:36]),
-	.SENSOR_DELAY(46),
+	.SENSOR_DELAY(tia_en ? 21 : 46),
+	.LINE_DELAY(tia_en ? 8 : 8),
 
 	.TARGET(gun_target),
 	.SENSOR(gun_sensor),
@@ -670,82 +773,34 @@ logic [7:0] pd_a, pd_b, pd_c, pd_d;
 logic sb_a, sb_b, sb_c, sb_d;
 logic pdb_a, pdb_b, pdb_c, pdb_d;
 
-assign joya_a = status[7] ? joya_2 : joya_0;
-assign joya_b = status[7] ? joya_3 : joya_1;
-assign joya_c = status[7] ? joya_0 : joya_2;
-assign joya_d = status[7] ? joya_1 : joya_3;
+wire [3:0] paddle_mask = {(portb_type == 2'd3 ? 2'b11 : 2'b00), (porta_type == 2'd3 ? 2'b11 : 2'b00)};
 
-assign pd_a = status[7] ? pd_2 : pd_0;
-assign pd_b = status[7] ? pd_3 : pd_1;
-assign pd_c = status[7] ? pd_0 : pd_2;
-assign pd_d = status[7] ? pd_1 : pd_3;
-
-assign sb_a = status[7] ? joy2[4] : joy0[4];
-assign sb_b = status[7] ? joy3[4] : joy1[4];
-assign sb_c = status[7] ? joy0[4] : joy2[4];
-assign sb_d = status[7] ? joy1[4] : joy3[4];
-
-assign pdb_a = status[7] ? joy2[9] : joy0[9];
-assign pdb_b = status[7] ? joy3[9] : joy1[9];
-assign pdb_c = status[7] ? joy0[9] : joy2[9];
-assign pdb_d = status[7] ? joy1[9] : joy3[9];
-
-paddle_ctl paddle0
+paddle_chooser paddles
 (
-	.clk       (clk_sys),
-	.inv       (1),
-	.stick_btn (sb_a),
-	.joy_a     (joya_a),
-	.paddle_btn(pdb_a),
-	.paddle    (pd_a),
-	.ps2_mouse (ps2_mouse),
-	.b_out     (pad_b[0]),
-	.a_out     (pad_ax[0])
+	.clk        (clk_sys),
+	.reset      (reset),
+	.mask       (paddle_mask),
+	.enable0    (1'b1),
+	.enable1    (1'b1),
+	.mouse      (ps2_mouse),
+	.analog     ({joya_3, joya_2, joya_1, joya_0}),
+	.paddle     ({pd_3, pd_2, pd_1, pd_0}),
+	.buttons_in ({joy3[9], joy2[9], joy1[9], joy0[9]}),
+	
+	.assigned   ({pad3_assigned, pad2_assigned, pad1_assigned, pad0_assigned}),
+	.pd_out     ({pad_ax[3], pad_ax[2], pad_ax[1], pad_ax[0]}),
+	.paddle_but (pad_b)
 );
 
-paddle_ctl paddle1
-(
-	.clk       (clk_sys),
-	.inv       (1),
-	.stick_btn (sb_b),
-	.joy_a     (joya_b),
-	.paddle_btn(pdb_b),
-	.paddle    (pd_b),
-	.ps2_mouse (ps2_mouse),
-	.b_out     (pad_b[1]),
-	.a_out     (pad_ax[1])
-);
+logic [31:0] difference0, difference1, difference2, difference3;
 
-paddle_ctl paddle2
-(
-	.clk       (clk_sys),
-	.inv       (1),
-	.stick_btn (sb_c),
-	.joy_a     (joya_c),
-	.paddle_btn(pdb_c),
-	.paddle    (pd_c),
-	.ps2_mouse (ps2_mouse),
-	.b_out     (pad_b[2]),
-	.a_out     (pad_ax[2])
-);
+wire [3:0] pread_mux1 = status[49] ? {i_read[2], i_read[3], i_read[0], i_read[1]} : i_read;
+wire [3:0] pread_mux2 = status[7] ? {pread_mux1[1:0], pread_mux1[3:2]} : pread_mux1;
 
-paddle_ctl paddle3
-(
-	.clk       (clk_sys),
-	.inv       (1),
-	.stick_btn (sb_d),
-	.joy_a     (joya_d),
-	.paddle_btn(pdb_d),
-	.paddle    (pd_d),
-	.ps2_mouse (ps2_mouse),
-	.b_out     (pad_b[3]),
-	.a_out     (pad_ax[3])
-);
-
-paddle_timer pt0 (clk_sys, 1, {~pad_ax[0][7], pad_ax[0][6:0], 1'b0}, ~iout[1], pad_wire[0]);
-paddle_timer pt1 (clk_sys, 1, {~pad_ax[1][7], pad_ax[1][6:0], 1'b0}, ~iout[1], pad_wire[1]);
-paddle_timer pt2 (clk_sys, 1, {~pad_ax[2][7], pad_ax[2][6:0], 1'b0}, ~iout[1], pad_wire[2]);
-paddle_timer pt3 (clk_sys, 1, {~pad_ax[3][7], pad_ax[3][6:0], 1'b0}, ~iout[1], pad_wire[3]);
+paddle_timer pt0 (clk_sys, 1, reset || ~paddle_mask[0], {1'b0, pad_ax[0][7:0]}, ~iout[1], pread_mux2[0], pad_wire[0], difference0);
+paddle_timer pt1 (clk_sys, 1, reset || ~paddle_mask[1], {1'b0, pad_ax[1][7:0]}, ~iout[1], pread_mux2[1], pad_wire[1], difference1);
+paddle_timer pt2 (clk_sys, 1, reset || ~paddle_mask[2], {1'b0, pad_ax[2][7:0]}, ~iout[1], pread_mux2[2], pad_wire[2], difference2);
+paddle_timer pt3 (clk_sys, 1, reset || ~paddle_mask[3], {1'b0, pad_ax[3][7:0]}, ~iout[1], pread_mux2[3], pad_wire[3], difference3);
 
 logic [7:0] mouse_x, mouse_y;
 logic dir_x, dir_y;
@@ -755,9 +810,42 @@ logic trackball_button;
 
 wire pada_0, pada_1, padb_0, padb_1;
 
+wire is_rdiff = joya[11] | joyb[11];
+wire is_ldiff = joya[10] | joyb[10];
+wire is_halt = joya[12] | joyb[12];
+wire is_bw = (joya[6] | joyb[6]) && tia_en;
+
+logic old_rdiff, old_ldiff, old_bw, old_halt;
+wire toggle_rdiff = ~old_rdiff && is_rdiff;
+wire toggle_ldiff = ~old_ldiff && is_ldiff;
+wire toggle_bw = ~old_bw && is_bw;
+wire toggle_paddle = old_auto_paddle != auto_paddle;
+wire toggle_halt = old_halt && ~is_halt;
+
+assign status_set = toggle_rdiff || toggle_ldiff || toggle_bw;
+always_comb begin
+	status_in = status;
+	status_in[62] = tia_en && toggle_bw ? ~status[62] : status[62];
+	status_in[12] = toggle_rdiff ? ~status[12] : status[12];
+	status_in[13] = toggle_ldiff ? ~status[13] : status[13];
+end
+
 always @(posedge clk_sys) begin
 	logic ps2_old;
 	logic xtog, ytog;
+	old_rdiff <= is_rdiff;
+	old_ldiff <= is_ldiff;
+	old_bw <= is_bw;
+	old_halt <= is_halt;
+	old_auto_paddle <= auto_paddle;
+	if (toggle_halt)
+		halted <= ~halted;
+	if (joya[4])
+		auto_paddle <= 0;
+	if (joya[9] && ~|status[41:38] && tia_en)
+		auto_paddle <= 1;
+	if (~tia_en || reset)
+		auto_paddle <= 0;
 
 	ps2_old <= ps2_mouse[24];
 
@@ -811,6 +899,8 @@ logic key6, key5, key4; // Row 1
 logic key9, key8, key7; // Row 2
 logic keyh, key0, keya; // Row 3
 
+logic keystart, keyselect;
+
 // Follows the format of il, id[1:0], pa[3:0]
 logic [6:0] keypad0, keypad1;
 wire [3:0] kp_out0 = PAout[7:4];
@@ -852,11 +942,28 @@ always @(posedge clk_sys) begin
 			9'h1a: keya <= ps2_key[9]; // Z
 			9'h22: key0 <= ps2_key[9]; // X
 			9'h21: keyh <= ps2_key[9]; // C
+			
+			// Numeric Keypad Layout
+			9'h77: key1 <= ps2_key[9]; // Numlock
+			9'h4A: key2 <= ps2_key[9]; // Divide
+			9'h7C: key3 <= ps2_key[9]; // Times
+			9'h6C: key4 <= ps2_key[9]; // Num 7
+			9'h75: key5 <= ps2_key[9]; // Num 8
+			9'h7D: key6 <= ps2_key[9]; // Num 9
+			9'h6B: key7 <= ps2_key[9]; // Num 4
+			9'h73: key8 <= ps2_key[9]; // Num 5
+			9'h74: key9 <= ps2_key[9]; // Num 6
+			9'h69: keya <= ps2_key[9]; // Num 1
+			9'h72: key0 <= ps2_key[9]; // Num 2
+			9'h7A: keyh <= ps2_key[9]; // Num 3
+			
+			9'h06: keystart <= ps2_key[9];  // F2
+			9'h05: keyselect <= ps2_key[9]; // F1
 
 		endcase
 	end
 	if (reset)
-		{key1, key2, key3, key4, key5, key6, key7, key8, key9, key0, keyh, keya} <= '0;
+		{key1, key2, key3, key4, key5, key6, key7, key8, key9, key0, keyh, keya, keystart, keyselect} <= '0;
 
 	// These have pull-ups in an undisturbed state
 	keypad0 <= '1;
@@ -883,20 +990,10 @@ always @(posedge clk_sys) begin
 
 end
 
-wire [7:0] snac_type = 8'd9;
+wire [7:0] snac_type = 8'd10;
 wire [3:0] snac_pa_in = {USER_IN[3], USER_IN[5], USER_IN[0], (status[6] ? ~USER_IN[2] : USER_IN[1])};
 wire [1:0] snac_id_in = {USER_IN[6], USER_IN[4]} & ((~status[5] || status[6]) ? 2'b00 : 2'b11); // FIXME: These may be backwards.
 wire snac_il_in = (status[6] ? USER_IN[4] : USER_IN[2]);
-
-wire tape_sync;
-reg   [23:0] adc_out;
-ltc2308 ltc2308
-(
-	.clk(CLK_50M),
-	.ADC_BUS(ADC_BUS),
-	.dout_sync(tape_sync),
-	.dout(adc_out)
-);
 
 // Controller      Lightgun   Trakball   Paddle   Keypad  AmigaM   STM       Mister Pin
 // Pin 1 - Up      Trigger    Dir X               Row 0   VPulse   VHPulse   USER_IN[1]
@@ -920,6 +1017,7 @@ ltc2308 ltc2308
 //   8 = ST mouse
 //   9 = Amiga mouse
 wire [6:0] amiga_mouse = {st_mouse[6:5], st_mouse[0], st_mouse[2:1], st_mouse[3]};
+wire [3:0] pad_muxa, pad_muxb;
 
 logic [7:0] header_type0, header_type1;
 always_comb begin
@@ -959,24 +1057,26 @@ always_comb begin
 	end else if (is_snac1) begin
 		{USER_OUT[6], USER_OUT[4], USER_OUT[3], USER_OUT[5], USER_OUT[0], USER_OUT[1]} = {iout[3:2], PAout[3:0]};
 	end
-	porta_type = |status[41:38] ? {4'd0, status[41:38] - 1'd1} : header_type0;
-	portb_type = |status[45:42] ? {4'd0, status[45:42] - 1'd1} : header_type1;
+	porta_type = |status[41:38] ? {4'd0, status[41:38] - 1'd1} : (auto_paddle ? 2'd3 : header_type0);
+	portb_type = |status[45:42] ? {4'd0, status[45:42] - 1'd1} : (auto_paddle ? 2'd3 : header_type1);
 
-	idump = {joyb[4], joyb[5], joya[4], joya[5]}; // P2 F1, P2 F2, P1 F1, P1 F2 or Analog
+	idump = tia_en ? {~joyb[5], 1'd0, ~joya[5], 1'd0} : {joyb[4], joyb[5], joya[4], joya[5]}; // P2 F1, P2 F2, P1 F1, P1 F2 or Analog
 	PAin[7:4] = {~joya[0], ~joya[1], ~joya[2], ~joya[3]}; // P1: R L D U
 	PAin[3:0] = {~joyb[0], ~joyb[1], ~joyb[2], ~joyb[3]}; // P2: R L D U
-	ilatch[0] = ~(joya[4] || joya[5]); // P1 Fire
-	ilatch[1] = ~(joyb[4] || joyb[5]); // P2 Fire
-
+	ilatch[0] = tia_en ? ~joya[4] : ~(joya[4] || joya[5]); // P1 Fire
+	ilatch[1] = tia_en ? ~joyb[4] : ~(joyb[4] || joyb[5]); // P2 Fire
+	pad_muxa = ~status[49] ? {~pad_b[0], ~pad_b[1], pad_wire[1:0]} : {~pad_b[1:0], pad_wire[0], pad_wire[1]};
+	pad_muxb = ~status[49] ? {~pad_b[2], ~pad_b[3], pad_wire[3:2]} : {~pad_b[3:2], pad_wire[2], pad_wire[3]};
 	case (porta_type)
 		0: begin PAin[7:4] = 4'b1111; ilatch[0] = 1'b1; idump[1:0] = 2'b00; end
 		2: if (~gun_port) begin PAin[7:4] = {3'b111, gun_trigger}; ilatch[0] = ~gun_sensor; idump[1:0] = 2'b00; end
-		3: begin PAin[7:4] = {pad_b[1:0], 2'b11}; idump[1:0] = pad_wire[1:0]; ilatch[0] = 1'b1; end
+		3: begin PAin[7:4] = {pad_muxa[3:2], 2'b11}; idump[1:0] = pad_muxa[1:0]; ilatch[0] = 1'b1; end
 		4: begin PAin[7:4] = trackball; ilatch[0] = ~trackball_button; idump[1:0] = 2'b00; end
 		5: begin PAin[7:4] = PAout[7:4]; ilatch[0] = keypad0[6]; idump[1:0] = keypad0[5:4]; end
 		6: begin PAin[7:4] = {2'b11, st_mouse[1:0]}; ilatch[0] = st_mouse[5]; idump[1:0] = 2'b00; end
 		7: begin PAin[7:4] = st_mouse[3:0]; ilatch[0] = ~st_mouse[5]; idump[1:0] = st_mouse[6:5]; end
 		8: begin PAin[7:4] = amiga_mouse[3:0]; ilatch[0] = ~amiga_mouse[5]; idump[1:0] = amiga_mouse[6:5]; end
+		9: begin idump[1:0] = {joya[5], joya[9]}; end
 		snac_type: begin PAin[7:4] = snac_pa_in; ilatch[0] = snac_il_in; idump[1:0] = snac_id_in[1:0]; end
 		default: ;
 	endcase
@@ -984,12 +1084,13 @@ always_comb begin
 	case (portb_type)
 		0: begin PAin[3:0] = 4'b1111; ilatch[1] = 1'b1; idump[3:2] = 2'b00; end
 		2: if (gun_port) begin PAin[3:0] = {3'b111, gun_trigger}; ilatch[1] = ~gun_sensor; idump[3:2] = 2'b00; end
-		3: begin PAin[3:0] = {pad_b[3:2], 2'b11}; idump[3:2] = pad_wire[3:2]; ilatch[1] = 1'b1; end
+		3: begin PAin[3:0] = {pad_muxb[3:2], 2'b11}; idump[3:2] = pad_muxb[1:0]; ilatch[1] = 1'b1; end
 		4: if (porta_type != 4) begin PAin[3:0] = trackball; ilatch[1] = ~trackball_button; idump[3:2] = 2'b00; end
 		5: begin PAin[3:0] = PAout[3:0]; ilatch[1] = keypad1[6]; idump[3:2] = keypad1[5:4]; end
 		6: begin PAin[3:0] = {2'b11, st_mouse[1:0]}; ilatch[1] = st_mouse[5]; idump[3:2] = 2'b00; end
 		7: begin PAin[3:0] = st_mouse[3:0]; ilatch[1] = ~st_mouse[5]; idump[3:2] = st_mouse[6:5]; end
 		8: begin PAin[3:0] = amiga_mouse[3:0]; ilatch[1] = ~amiga_mouse[5]; idump[3:2] = amiga_mouse[6:5]; end
+		9: begin idump[3:2] = {joyb[5], joyb[9]}; end
 		snac_type: if (~is_snac0) begin PAin[3:0] = snac_pa_in; ilatch[1] = snac_il_in; idump[3:2] = snac_id_in[1:0]; end
 		default: ;
 	endcase
@@ -1030,7 +1131,7 @@ cofi coffee (
 	.blue_out   (b_cofi)
 );
 
-assign VGA_F1 = 1'b0;
+assign VGA_F1 = tia_f1;
 assign CLK_VIDEO = clk_vid;
 assign VGA_SL = sl[1:0];
 
@@ -1045,10 +1146,14 @@ always @(posedge CLK_VIDEO) begin
 	voff <= (vcopt < 6) ? {vcopt,1'b0} : ({vcopt,1'b0} - 5'd24);
 end
 
+// Based on 3.579545 MHz (NTSC), 3.546894 MHz (PAL) for 2600
 always_comb begin
 	arx = 0;
 	ary = 0;
-	if (~region_select) begin // NTSC
+	if (tia_en) begin
+		arx = region_select ? 12'd80 : 12'd640;
+		ary = region_select ? 12'd69 : 12'd561;
+	end else if (~region_select) begin // NTSC
 		if (~status[14]) begin // Show border
 			if (status[29]) begin // Show Overscan
 				arx = 12'd3471;

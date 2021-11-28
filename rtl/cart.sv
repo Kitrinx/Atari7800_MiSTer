@@ -29,6 +29,8 @@ module cart
 	input  logic  [7:0] open_bus,
 	input  logic [10:0] ps2_key,
 	input  logic        pokey_irq_en,
+	input  logic [7:0]  cartram_data,
+
 	output logic        IRQ_n,
 	output logic [7:0]  dout,
 	output logic        hsc_ram_cs,
@@ -39,7 +41,11 @@ module cart
 	output logic [15:0] ym_audio_l,
 	output logic [15:0] covox_r,
 	output logic [15:0] covox_l,
-	output logic [24:0] rom_address
+	output logic [24:0] rom_address,
+	output logic [17:0] cartram_addr,
+	output logic        cartram_wr,
+	output logic        cartram_rd,
+	output logic [7:0]  cartram_wrdata
 );
 
 logic [7:0] bank_reg;
@@ -264,15 +270,21 @@ always_ff @(posedge clk_sys) begin
 	end
 end
 
-spram #(.addr_width(17)) cart_ram
-(
-	.clock   (clk_sys),
-	.address (souper_en ? souper_addr : ({ram_bank, address_in[13:0]} & ram_mask)),
-	.data    (din),
-	.wren    ((ram_cs || (~souper_ram_cs && souper_en)) && ~rw && pclk0),
-	.q       (ram_dout),
-	.cs      (1)
-);
+// spram #(.addr_width(17)) cart_ram
+// (
+// 	.clock   (clk_sys),
+// 	.address (souper_en ? souper_addr : ({ram_bank, address_in[13:0]} & ram_mask)),
+// 	.data    (din),
+// 	.wren    ((ram_cs || (~souper_ram_cs && souper_en)) && ~rw && pclk0),
+// 	.q       (ram_dout),
+// 	.cs      (1)
+// );
+
+assign cartram_addr = (souper_en ? souper_addr[17:0] : ({ram_bank, address_in[13:0]} & ram_mask));
+assign cartram_wr = ((ram_cs || (~souper_ram_cs && souper_en)) && ~rw && pclk0);
+assign cartram_rd = ~cartram_wr;
+assign cartram_wrdata = din;
+assign ram_dout = cartram_data;
 
 //CS Type:
 //00 - high impedance

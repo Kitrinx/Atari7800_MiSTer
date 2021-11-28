@@ -6,6 +6,7 @@ module lightgun
 
 	input [24:0] MOUSE,
 	input        MOUSE_XY,
+	input  [9:0] H_WIDTH,
 
 	input        LIGHT,
 
@@ -20,13 +21,14 @@ module lightgun
 	input  [1:0] SIZE,
 	
 	input  [7:0] SENSOR_DELAY,
+	input  [7:0] LINE_DELAY,
 	
 	output logic TARGET,
 	output logic SENSOR,
 	output logic TRIGGER
 );
 
-localparam H_WIDTH = 9'd372;
+//localparam H_WIDTH = 9'd372;
 
 assign TARGET  = ~offscreen & draw;
 
@@ -62,7 +64,7 @@ always @(posedge CLK) begin
 		if (!first_light_h)
 			first_light_col <= hcnt;
 		if (!first_light)
-			first_light_line <= vcnt;
+			first_light_line <= vcnt - LINE_DELAY;
 	end
 
 	case(SIZE)

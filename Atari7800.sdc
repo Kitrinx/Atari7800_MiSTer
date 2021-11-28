@@ -5,4 +5,4 @@
 #create_generated_clock -divide_by 4 -source {emu:emu|clk_sys} -name tia_clk_gen {emu:emu|Atari7800:main|tia_clk_gen}
 
 #set_false_path -rise_from   {*emu|reset}
-set_false_path -to   {*emu|reset}
+#set_false_path -to   {*emu|reset}

@@ -8,6 +8,13 @@
 
 // Based on Stella Programmer's Guide, TIA Schematics, and Decapped TIA.
 
+// This design is not the most efficient in the world. There's combinational loops, and there's
+// places that seem like they could use clock enables rather continuous logic. The reason I
+// ultimately did it this way is because there is frankly tons of analog delays and asynchronous
+// clocking that make the outcome of various scenarios fairly unpredictable, and almost
+// all of these edge cases seem to come up in one game or another. Thus, I erred on the side
+// of accuracy at the price of efficiency.
+
 typedef enum bit [5:0] {
 	VSYNC   = 6'h00,  // Write: vertical sync set-clear (D1)
 	VBLANK  = 6'h01,  // Write: vertical blank set-clear (D7-6,D1)
@@ -55,8 +62,8 @@ typedef enum bit [5:0] {
 	HMCLR   = 6'h2b,  // Write: clear horizontal motion registers (strobe)
 	CXCLR   = 6'h2c,  // Write: clear collision latches (strobe)
 	ENBLO   = 6'h3D,  // Not a real register, used for ENABL OLD
-	GRP0O   = 6'h3E,  // Not a real register, used for GPR0 storage
-	GRP1O   = 6'h3F   // Not a real register, used for GPR1 storage
+	GRP0O   = 6'h3E,  // Not a real register, used for GRP0 storage
+	GRP1O   = 6'h3F   // Not a real register, used for GRP1 storage
 } write_registers;
 
 typedef enum bit [3:0] {
@@ -76,240 +83,621 @@ typedef enum bit [3:0] {
 	INPT5   = 4'hd   // Read P2 joystick trigger: D7
 } read_registers;
 
+typedef struct packed {
+	logic edge_p1;  // Clock falling edge for all clocks
+	logic edge_p2;  // Clock rising edge for all clocks
+	logic level_p1; // Phase 1 for ripple counters
+	logic level_p2; // Phase 2 for ripple counters
+	logic clock;    // Clock for symmetric clocks
+} clock_t;
 
 /////////////////////////////////////////////////////////////////////////////////////////
-module horiz_gen
+
+module lfsr_6
 (
 	input clk,
-	input rst,
-	input HP1,
-	input HP2,
-	input rsync,
-	input hmove,
-	output hsync,
-	output logic cntd,
-	output logic cnt,
-	output logic res0d,
-	output logic hblank, // Hblank signal with proper delays for hmove
-	output logic hgap, // Hblank signal without delay
-	output aud0, // Audio clocks need to be high twice per line
-	output aud1,
-	output logic shb,
-	output logic rhb,
-	output logic wsr,
-	output logic shbd
+	input phi1,
+	input phi2,
+	input reset,
+	input sys_reset,
+	output logic [5:0] lfsr
+);
+	reg [5:0] lfsr_latch1, lfsr_next;
+
+	assign lfsr = reset ? 6'd0 : (phi2 ? lfsr_next : lfsr_latch1);
+
+	always @(posedge clk) begin
+
+		if (phi1)
+			lfsr_next <= {~((lfsr_latch1[1] && ~lfsr_latch1[0]) || ~(lfsr_latch1[1] || ~lfsr_latch1[0])), lfsr_latch1[5:1]};
+
+		if (phi2)
+			lfsr_latch1 <= lfsr;
+
+		if (reset || sys_reset) begin
+			lfsr_latch1 <= 0;
+		end
+	end
+
+endmodule
+
+module lfsr_6_instant
+(
+	input clk,
+	input phi1,
+	input phi2,
+	input reset,
+	input sys_reset,
+	output logic [5:0] lfsr
+);
+	reg [5:0] lfsr_latch1;
+
+	wire [5:0] lfsr_next = reset ? 6'd0 : {~((lfsr[1] && ~lfsr[0]) || ~(lfsr[1] || ~lfsr[0])), lfsr[5:1]};
+	always @(posedge clk) begin
+		if (phi1) begin
+			lfsr_latch1 <= lfsr_next;
+		end
+
+		if (phi2)
+			lfsr <= lfsr_latch1;
+
+		if (sys_reset) begin
+			lfsr_latch1 <= 0;
+			lfsr <= 0;
+		end
+	end
+
+endmodule
+
+module sr_latch
+(
+	input clk,
+	input reset,
+	input r,
+	input s,
+	output logic q,
+	output logic q_n
 );
 
-// Horizontal Phase Clock Timing
-//
-// HP0 X--XX--XX--XX--XX--XX--XX--XX--X
-// HP1 -XX--XX--XX--XX--XX--XX--XX--XX-
+	wire i_val = r ? 1'd0 : (s ? 1'd1 : sr_val);
+	logic sr_val, sr_val_n;
+	assign q_n = (r & s) ? 1'd0 : ~q;
+	assign q = i_val;
 
-// 75 - 144 = 69
-// 109 - 185 = 76
-// starts 34 early, ends 41 early
-// 00
-// 10 - H1
-// 11
-// 01 - H0
-
-
-// 000000 err77 0  Error
-// 010100 end12 43 End
-// 110111 rhs73 8  Reset H Sync
-// 101100 cnt15 19 Center
-// 001111 rcb74    Reset Color Burst
-// 111100 shs17    Set H Sync
-// 010111 lrhb72   Late Reset H Blank
-// 011100 rhb16    Reset H Blank
-
-localparam hsync_start = 26; // sync and burst 16 counts
-localparam hsync_end = hsync_start + 16;
-localparam hblank_start = 0; // Blank 68 counts
-localparam hblank_end = 67; // Blank 68 counts
-
-logic [5:0] lfsr;
-logic hsync_1;
-logic hmove_latch;
-logic hblank_set;
-
-logic err, rhs, rcb, shs, lrhb, ehb;
-
-assign aud0 = (HP2 && (shb || lrhb));
-assign aud1 = (HP2 && (rhs || cnt));
-
-assign res0d = err || shb;
-// RHS Delayed twice for hsync, delayed once for audclk0
-// CNT delayed once for audc0, delayed 0 for playfield.
-always_comb begin
-	{err, wsr, rhs, ehb, cnt, shs, lrhb, rhb} = '0;
-	case (lfsr)
-			6'b000000: wsr = 1;
-			6'b111111: err = 1;    // Error
-			6'b010100: ehb = 1;    // End (Set Hblank)
-			6'b110111: rhs = 1;    // Reset HSync
-			6'b101100: cnt = 1;    // Center // 101001?
-//			6'b001111: rcb = 1;    // Reset Color Burst
-			6'b111100: shs = 1;    // Set Hsync
-			6'b011100: rhb = 1;    // Reset HBlank
-			6'b010111: lrhb = 1;   // Late Reset Hblank
-			default: ;
-	endcase
-end
-
-logic shb_1;
-always_ff @(posedge clk) if (rst) begin
-	lfsr <= 0;
-	hmove_latch <= 0;
-	hsync <= 0;
-	hblank_set <= 0;
-	hgap <= 0;
-	shb <= 0;
-	hsync_1 <= 0;
-	cntd <= 0;
-	shbd <= 0;
-	shb_1 <= 0;
-end else begin
-	if (hmove)
-		hmove_latch <= 1;
-
-	if (HP2) begin
-		lfsr <= (ehb || rsync || err) ? 6'd0 : {~((lfsr[1] && ~lfsr[0]) || ~(lfsr[1] || ~lfsr[0])), lfsr[5:1]};		
+	always @(posedge clk) begin
+		sr_val <= i_val;
+		if (reset)
+			sr_val <= 1'd0;
 	end
 
-	if (HP1) begin
-		hblank <= hblank_set;
-		shb <= ehb || rsync || err;
+endmodule
 
-		cntd <= cnt;
-		hsync <= hsync_1;
+/////////////////////////////////////////////////////////////////////////////////////////
+module f_cell
+(
+	input  logic   clk,
+	input  logic   reset,
+	input  logic   tick,
+	input  logic   r_n,
+	input  logic   s_n,
+	output logic   q_n,
+	output logic   q
+);
+	logic q_in, qn_in;
 
-		if (shb) begin
-			hblank_set <= 1;
-			hmove_latch <= 0;
-			hgap <= 1;
-			lfsr <= 6'd0;
-		end
+	sr_latch in_sr
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.r          (~(tick || s_n)),
+		.s          (~(tick || r_n) || reset),
+		.q          (q_in),
+		.q_n        (qn_in)
+	);
 
-		if (rhs) begin
-			hsync_1 <= 0;
-		end
+	sr_latch out_sr
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.r          ((q_in && tick) || reset),
+		.s          (qn_in && tick),
+		.q          (q),
+		.q_n        (q_n)
+	);
 
-		if (shs) begin
-			hsync_1 <= 1;
-		end
-		if (rhb) begin
-			hblank_set <= hmove_latch;
-			hgap <= 0;
-		end
+endmodule
 
-		if (lrhb) begin
-			hblank_set <= 0;
+module f_counter_ll
+(
+	input  logic   clk,
+	input  logic   reset,
+	input  logic   sys_reset,
+	input  logic   tick,
+	output clock_t clock,
+	output logic   f1_qn,
+	output logic   f1_q_l
+);
+
+	logic q_left, q_left_n, q_right, q_right_n;
+	logic f1_q_l_l;
+
+	assign clock.clock = 0; // Edges and clock are unused for the ripple counter low level
+	assign clock.edge_p1 = 0;
+	assign clock.edge_p2 = 0;
+	assign clock.level_p1 = ~(q_left || q_right);
+	assign clock.level_p2 = ~(q_left_n || q_right_n);
+	assign f1_qn = q_right_n;
+
+	f_cell f_left
+	(
+		.clk        (clk),
+		.reset      (reset || sys_reset),
+		.tick       (tick),
+		.s_n        (q_right),
+		.r_n        (q_right_n),
+		.q          (q_left),
+		.q_n        (q_left_n)
+	);
+
+	f_cell f_right
+	(
+		.clk        (clk),
+		.reset      (reset || sys_reset),
+		.tick       (tick),
+		.s_n        (q_left_n),
+		.r_n        (q_left),
+		.q          (q_right),
+		.q_n        (q_right_n)
+	);
+
+	sr_latch q_1l
+	(
+		.clk        (clk),
+		.reset      (sys_reset),
+		.r          (~q_right_n),
+		.s          (reset),
+		.q          (f1_q_l),
+		.q_n        ()
+	);
+endmodule
+
+module d_cell
+(
+	input  logic   clk,
+	input  logic   reset,
+	input  logic   phi1,
+	input  logic   phi2,
+	input  logic   in,
+	output logic   out
+);
+	logic out_next, out_latch;
+
+	assign out = reset ? 1'd0 : (phi2 ? out_next : out_latch);
+
+	always @(posedge clk) begin
+		if (phi1)
+			out_next <= in;
+
+		if (phi2)
+			out_latch <= out_next;
+
+		if (reset) begin
+			out_latch <= 0;
+			out_next <= 0;
 		end
 	end
+endmodule
+
+module inverter_reg
+(
+	input clk,
+	input reset,
+	input set,
+	input in,
+	output out
+);
+
+	logic inv_latch = 0;
+	// FIXME: I'm treating this as a gate delay since I am using a 14mhz clock for this design,
+	// but with slower clocks, this may need to be continuous to work correctly.
+	assign out = /*set ? in : */inv_latch;
+
+	always @(posedge clk) begin
+		if (set)
+			inv_latch <= in;
+		if (reset)
+			inv_latch <= 0;
+	end
+endmodule
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+module f_counter
+(
+	input  logic   clk,
+	input  logic   reset,
+	input  logic   sys_reset,
+	input  logic   tick,
+	output clock_t clock,
+	output logic   f1_qn,
+	output logic   f1_qn_edge,
+	output logic   f1_q_l
+);
+
+// This component re-occurs throughout the design multiple times and contains two
+// F1 cells, effectively creating a counter that goes from 0 to 3 and then resets, flipping the
+// clock on two of the four positions.
+
+// This does not generate a symmetric clock. It is a four phase ripple counter, so PH1 and
+// PH2 will only be high for one clock each out of four clocks total.
+
+localparam EDGE_P1 = 3;
+localparam LEVEL_P1 = 0;
+localparam EDGE_P2 = 1;
+localparam LEVEL_P2 = 2;
+
+// Left      Right
+// q   qn    q   qn
+// 0    1    0    1
+// 1    0    0    1
+// 1    0    1    0
+// 0    1    1    0
+
+logic [1:0] f_count = 0;
+logic old_tick, old_reset;
+logic f1_qn_reg;
+
+wire tick_edge = ~old_tick && tick;
+
+assign clock.edge_p1 = tick_edge && ((f_count == EDGE_P1) || reset && ~clock.level_p1);
+assign clock.edge_p2 = tick_edge && (f_count == EDGE_P2) && ~clock.level_p2 && ~reset;
+assign clock.level_p1 = (f_count == LEVEL_P1) || reset && old_reset;
+assign clock.level_p2 = (f_count == LEVEL_P2);
+assign f1_qn_edge = tick_edge && f_count == 3;
+assign f1_qn = (f_count == 0 || f_count == 1);
+assign f1_q_l = reset ? 1'd1 : (~f1_qn ? 1'd0 : f1_qn_reg);
+assign clock.clock = 0; // Clock is unused for ripple counters!!
+
+always_ff @(posedge clk) begin
+	old_tick <= tick;
+	old_reset <= reset;
+
+	if (tick_edge) begin
+		f_count <= f_count + 1'd1;
+	end
+
+	if (reset || sys_reset) begin
+		f_count <= reset ? 1'd1 : 2'd0;
+		if (sys_reset) old_tick <= 0;
+		if (reset)
+			f1_qn_reg <= 1;
+	end
+
+	if (~f1_qn)
+		f1_qn_reg <= 0;
+
 end
 
+endmodule
 
+module cpuclk
+(
+	input         clk,
+	input         reset,
+	input clock_t oclk,
+	input         resp0,
+	output        phi0
+);
+
+	logic q_1, q_2, q_3, q_4;
+	logic qn_1, qn_2, qn_3, qn_4;
+
+	assign phi0 = (q_1 || q_4);
+
+	wire q_3_nor = ~(q_4 || qn_2);
+
+	sr_latch q_1l
+	(
+		.clk    (clk),
+		.reset  (reset),
+		.r      (~(oclk.clock || q_4)),
+		.s      (~(oclk.clock || qn_4)),
+		.q      (q_1),
+		.q_n    (qn_1)
+	);
+
+	sr_latch q_2l
+	(
+		.clk    (clk),
+		.reset  (reset),
+		.r      (oclk.clock && q_1),
+		.s      ((oclk.clock && qn_1) || resp0),
+		.q      (q_2),
+		.q_n    (qn_2)
+	);
+
+	sr_latch q_3l
+	(
+		.clk    (clk),
+		.reset  (reset),
+		.r      (~(oclk.clock || ~q_3_nor)),
+		.s      (~(oclk.clock || q_3_nor)),
+		.q      (q_3),
+		.q_n    (qn_3)
+	);
+
+	sr_latch q_4l
+	(
+		.clk    (clk),
+		.reset  (reset),
+		.r      (oclk.clock && q_3),
+		.s      ((oclk.clock && qn_3) || resp0),
+		.q      (q_4),
+		.q_n    (qn_4)
+	);
 endmodule
 
 /////////////////////////////////////////////////////////////////////////////////////////
 module clockgen
 (
-	input clk,
-	input ce,
-	input reset,
-	input rsync,
-	input logic res0d,
-	output logic rsync_d,
-	output logic phi0,
-	output logic phi1,
-	output logic phi2_gen,
-	output logic phase,
-	output logic HP1,
-	output logic HP2,
-	output logic CC
+	input  logic   clk,    // System clock
+	input  logic   is_7800,
+	input  logic   ce,     // clock enable. This is expected to be 7.159091 mhz, 2x the original atari oscillator
+	input  logic   reset,  // reset signal
+	input  logic   rsync,  // RSYNC register written to
+	input  logic   rsynd,  // rsynd wire coming from the horizontal lfsr decoder
+	input  logic   pext_1, // CPU clk Phi1 external (7800)
+	input  logic   pext_2, // CPU clk Phi0/2 external
+	output logic   rsynl,  // RSYNC latch
+	output clock_t pclk, // CPU clock
+	output clock_t hclk, // Horizontal clock
+	output clock_t oclk,  // Oscillator Clock
+	output logic   phi0_ll
 );
 
-// Generation of Phi0. One phi0 clock is 3x hardware clocks, but we will allow for CE so we can use a single PLL.
-// In this implementation, our 6507 does not generate phi2, so we will add here as an extra port which can
-// be fed immediately back into the chip to satisfy the phi2 signal.
+parameter PHI2_EXT = 0;
+// Fantastic Clocks and Where To Find Them
+// system oscillator - every other CE, 3.1mhz
+// motclk            - inverse of the system oscillator while not hblank
+// clkp              - pixel clk, inverse of the system oscillator
+// horizontal clk    - HP1 and HP2, every four clkp
+// pclk              - phi0 = phi2, phi1 = ~phi0. cpu clk, every 3 system oscillator clks
 
-// It's important to note that in this context, CE represents the crystal or "color clock",
-// Phi0 represents the generated clock that drives the 6507, and Phi2 should be the same as Phi1, but one
-// "color clock" delayed, and it drives RIOT and parts of TIA. The actual "clk" port is any PLL.
+logic oclk_tog;
+logic [2:0] pclk_div;
+logic pclock;
+wire pclk_edge = (oclk.edge_p1 || oclk.edge_p2);
+assign oclk.edge_p2 = oclk_tog && ce;
+assign oclk.edge_p1 = ~oclk_tog && ce;
+assign oclk.level_p1 = ~oclk.clock;
+assign oclk.level_p2 = oclk.clock;
 
-// Using 2x the native oscillator we can set up clocks like this
+assign pclk.edge_p2 = ((is_7800 || PHI2_EXT) ? pext_2 : (pclk_div == 2) && pclk_edge) && ~pclk.clock; // Phi0 // 0
+assign pclk.edge_p1 = (is_7800 ? pext_1 : (pclk_div == 5 || (resp0 && pclk_div == 0)) && pclk_edge) && pclk.clock; // Phi1 // 1
+assign pclk.level_p1 = ~pclk.clock;
+assign pclk.level_p2 = pclk.clock;
 
-//     0123456789ABCDEF123456789
-// CC  X-X-X-X-X-X-X-X-X-X-X-X-X
-// H01 X-------X-------X-------X
-// H02 ----X-------X-------X----
-// PH0 X-----X-----X-----X-----X
-// PH1 -X-----X-----X-----X-----
-// PH1 ----X-----X-----X-----X--
+clock_t hclk_ll, hclk_hl;
 
-//assign CC = ce;
-logic [2:0] phi_div;
-logic [2:0] hp_cnt;
-logic rsync_latch;
-logic phi_clear;
-logic cc_tog;
-logic hp_tog;
+f_counter hclk_counter
+(
+	.clk        (clk),
+	.reset      (rsync),
+	.sys_reset  (reset),
+	.tick       (oclk.edge_p2),
+	.clock      (hclk),
+	.f1_qn      (),
+	.f1_q_l     (rsynl)
+);
 
-assign HP1 = hp_cnt == 1 && ~hp_tog && CC;
-assign HP2 = hp_cnt == 1 && hp_tog && CC;
+wire resp0 = (hclk.level_p2 && rsynd) || reset;
 
-assign phi0 = phi_div == 1 && ce;
-assign phi1 = phi_div == 4 && ce;
-assign phase = phi_div > 2;
-assign CC = cc_tog && ce;
+// This is an original cpu clock divider purely for reference purposes. I left it in case
+// anyone ever wanted to use it for research.
+
+// cpuclk pclk_gen
+// (
+// 	.clk        (clk),
+// 	.reset      (reset),
+// 	.oclk       (oclk),
+// 	.resp0      (resp0),
+// 	.phi0       (phi0_ll)
+// );
+assign phi0_ll = 0;
 
 always_ff @(posedge clk) begin : phi0_gen
-	phi2_gen <= phi0;
+	// Oscillator Clock
 	if (ce) begin
-		cc_tog <= ~cc_tog;
-		phi_div <= phi_div + 1'd1;
-
-		if (phi_div == 5)
-			phi_div <= 0;
+		oclk_tog <= ~oclk_tog;
 	end
 
-	if (CC) begin
-		hp_cnt <= hp_cnt + 1'd1;
-		if (hp_cnt == 1) begin
-			hp_cnt <= 0;
-			hp_tog <= ~hp_tog;
-		end
+	if (oclk.edge_p2) begin
+		oclk.clock <= 1;
+	end else if (oclk.edge_p1) begin
+		oclk.clock <= 0;
 	end
 
-
-	if (rsync)
-		rsync_latch <= 1;
-
-	if ((rsync || rsync_latch) && phi_div == 0 && (ce && ~CC)) begin
-		rsync_latch <= 0;
-		rsync_d <= 1;
-		hp_cnt <= 0;
-		hp_tog <= 0;
-		phi_clear <= 1;
+	// CPU Clock
+	if (pclk_edge) begin
+		pclk_div <= (pclk_div == 5) ? 3'd0 : pclk_div + 1'd1;
 	end
 
-	if ((res0d || phi_clear) && HP1) begin
-		phi_div <= 1;
-		phi_clear <= 0;
-	end
+	if (pclk.edge_p2)
+		pclk.clock <= 1'b1;
+	else if (pclk.edge_p1)
+		pclk.clock <= 1'b0;
 
+	if (hclk.edge_p2 && rsynd) begin
+		pclk_div <= 3'd2;
+	end
 
 	if (reset) begin
-		rsync_latch <= 0;
-		cc_tog <= 0;
-		rsync_d <= 0;
-		phi_clear <= 0;
-		phi2_gen <= 0;
-		phi_div <= 0;
-		hp_cnt <= 0;
+		pclk_div <= 3'd4;
+		oclk_tog <= 0;
+		oclk.clock <= '0;
+		pclk.clock  <= 0;
 	end
 end
+
+endmodule
+
+/////////////////////////////////////////////////////////////////////////////////////////
+module horiz_gen
+(
+	input logic clk,
+	input logic rst,
+	input clock_t hclk,
+	input logic rsynl,
+	input logic sec,
+	output logic hsync,
+	output logic CB,
+	output logic cntd,
+	output logic cnt,
+	output logic hblank, // Hblank signal with proper delays for hmove
+	output logic hgap, // Hblank signal without delay
+	output logic aud0, // Audio clocks need to be high twice per line
+	output logic aud1,
+	output logic shb,
+	output logic rhb,
+	output logic rsynd
+);
+
+	logic [5:0] lfsr;
+	logic sec_latch, sec_latch_n;
+	
+	logic err, rhs, rcb, shs, lrhb, ehb;
+	logic aud1_l, aud2_l;
+	logic rhs_d;
+	logic hblank_n, hgap_n;
+	
+	assign aud0 = aud1_l;
+	assign aud1 = aud2_l;
+	wire eer = (ehb || rsynl || err);
+	
+	lfsr_6 timing_lfsr
+	(
+		.clk       (clk),
+		.phi1      (hclk.level_p1),
+		.phi2      (hclk.level_p2),
+		.reset     (shb || rst),
+		.sys_reset (rst),
+		.lfsr      (lfsr)
+	);
+
+	always_comb begin
+		{err, rhs, ehb, cnt, shs, lrhb, rhb, rcb} = '0;
+		case (lfsr)
+				6'b111111: err  = 1;    // Error
+				6'b010100: ehb  = 1;    // End (Set Hblank)
+				6'b110111: rhs  = 1;    // Reset HSync
+				6'b101100: cnt  = 1;    // Center
+				6'b001111: rcb  = 1;    // Reset Color Burst
+				6'b111100: shs  = 1;    // Set Hsync
+				6'b011100: rhb  = 1;    // Reset HBlank
+				6'b010111: lrhb = 1;    // Late Reset Hblank
+				default: ;
+		endcase
+	end
+
+	sr_latch sec_l
+	(
+		.clk    (clk),
+		.reset  (rst),
+		.r      (sec),
+		.s      (shb),
+		.q      (sec_latch),
+		.q_n    (sec_latch_n)
+	);
+
+	inverter_reg rsynd_ir(clk, rst, hclk.level_p1, eer, rsynd);
+	inverter_reg shb_ir(clk, rst, hclk.level_p2, rsynd, shb);
+
+	d_cell aud1_d
+	(
+		.clk        (clk),
+		.reset      (rst),
+		.phi1       (hclk.level_p1),
+		.phi2       (hclk.level_p2),
+		.in         (shb || lrhb),
+		.out        (aud1_l)
+	);
+
+	d_cell aud2_d
+	(
+		.clk        (clk),
+		.reset      (rst),
+		.phi1       (hclk.level_p1),
+		.phi2       (hclk.level_p2),
+		.in         (rhs || cnt),
+		.out        (aud2_l)
+	);
+
+	d_cell rhs_db
+	(
+		.clk        (clk),
+		.reset      (rst),
+		.phi1       (hclk.level_p1),
+		.phi2       (hclk.level_p2),
+		.in         (rhs),
+		.out        (rhs_d)
+	);
+
+	d_cell hsync_dl
+	(
+		.clk        (clk),
+		.reset      (rst || rhs_d),
+		.phi1       (hclk.level_p1),
+		.phi2       (hclk.level_p2),
+		.in         (hsync || shs),
+		.out        (hsync)
+	);
+
+	wire hb_1a = sec_latch && rhb;
+	wire hb_1b = sec_latch_n && lrhb;
+
+	d_cell hblank_dl
+	(
+		.clk        (clk),
+		.reset      (rst || shb),
+		.phi1       (hclk.level_p1),
+		.phi2       (hclk.level_p2),
+		.in         (hblank_n || hb_1a || hb_1b),
+		.out        (hblank_n)
+	);
+
+	assign hblank = ~hblank_n;
+
+	d_cell hgap_dl
+	(
+		.clk        (clk),
+		.reset      (rst || shb),
+		.phi1       (hclk.level_p1),
+		.phi2       (hclk.level_p2),
+		.in         (hgap_n || rhb),
+		.out        (hgap_n)
+	);
+
+	assign hgap = ~hgap_n;
+
+	d_cell cb_dl
+	(
+		.clk        (clk),
+		.reset      (rst || rhs_d),
+		.phi1       (hclk.level_p1),
+		.phi2       (hclk.level_p2),
+		.in         (CB || rcb),
+		.out        (CB)
+	);
+
+	d_cell cnt_d
+	(
+		.clk        (clk),
+		.reset      (rst),
+		.phi1       (hclk.level_p1),
+		.phi2       (hclk.level_p2),
+		.in         (cnt),
+		.out        (cntd)
+	);
 
 endmodule
 
@@ -317,10 +705,10 @@ endmodule
 module hmove_gen
 (
 	input  logic       clk,
-	input  logic       cc,
 	input  logic       reset,
-	input  logic       HP1,
-	input  logic       HP2,
+	input  clock_t     hclk,
+	input  clock_t     oclk,
+	input  clock_t     pclk,
 	input  logic       hmove,
 	input  logic       hblank,
 	input  logic [3:0] p0_m,
@@ -335,51 +723,58 @@ module hmove_gen
 	output logic       m1_mclk,
 	output logic       bl_mclk
 );
-	logic p0ec, p1ec, m0ec, m1ec, blec;
-
-	assign p0_mclk = (~hblank || p0ec && HP1) && cc;
-	assign p1_mclk = (~hblank || p1ec && HP1) && cc;
-	assign m0_mclk = (~hblank || m0ec && HP1) && cc;
-	assign m1_mclk = (~hblank || m1ec && HP1) && cc;
-	assign bl_mclk = (~hblank || blec && HP1) && cc;
-
+	logic [1:0] p0ec, p1ec, m0ec, m1ec, blec;
 	logic [3:0] hmove_cnt;
-	logic sec_1, sec_2, sec_3;
+	logic sec_1, sec_0;
+	logic hmove_latch;
 
 	wire [3:0] hmc_uns = {~hmove_cnt[3], hmove_cnt[2:0]};
 
+	assign p0_mclk = (p0ec[1] && hclk.level_p1);
+	assign p1_mclk = (p1ec[1] && hclk.level_p1);
+	assign m0_mclk = (m0ec[1] && hclk.level_p1);
+	assign m1_mclk = (m1ec[1] && hclk.level_p1);
+	assign bl_mclk = (blec[1] && hclk.level_p1);
+
+	sr_latch hmove_l
+	(
+		.clk    (clk),
+		.reset  (reset),
+		.r      (sec_1),
+		.s      (hmove),
+		.q      (hmove_latch),
+		.q_n    ()
+	);
+
+	inverter_reg s0_ir(clk, reset, hclk.level_p1, hmove_latch, sec_0);
+	inverter_reg sec_ir(clk, reset, hclk.level_p2, sec_0, sec);
+	inverter_reg sec1_ir(clk, reset, hclk.level_p1, sec, sec_1);
+
 	always @(posedge clk) begin : hmove_block
-		// Hmove latches when set, then progresses through 
-		// HP1 gate, HP2 gate, then HP1 gate before it goes to the
-		// memory to take action at HP2
-		if (hmove)
-			sec_1 <= 1;
-		else if (sec)
-			sec_1 <= 0;
-
-		if (HP1) begin
-			sec_2 <= sec_1;
-			sec <= sec_3;
-		end
-
-		if (HP2) begin
-			sec_3 <= sec_2;
-			if (sec)
-				{p0ec, p1ec, m0ec, m1ec, blec} <= 5'b11111;
-
+		if (hclk.edge_p2) begin
 			if (sec || |hmove_cnt)
 				hmove_cnt <= hmove_cnt + 1'd1;
+			{p0ec[1], p1ec[1], m0ec[1], m1ec[1], blec[1]} <= {p0ec[0], p1ec[0], m0ec[0], m1ec[0], blec[0]};
+		end
 
+		if (hclk.level_p1) begin
+			if (sec)
+				{p0ec[0], p1ec[0], m0ec[0], m1ec[0], blec[0]} <= 5'b11111;
 			if (p0_m[3:0] == hmc_uns)
-				p0ec <= 0;
+				p0ec[0] <= 0;
 			if (p1_m[3:0] == hmc_uns)
-				p1ec <= 0;
+				p1ec[0] <= 0;
 			if (m0_m[3:0] == hmc_uns)
-				m0ec <= 0;
+				m0ec[0] <= 0;
 			if (m1_m[3:0] == hmc_uns)
-				m1ec <= 0;
+				m1ec[0] <= 0;
 			if (bl_m[3:0] == hmc_uns)
-				blec <= 0;
+				blec[0] <= 0;
+		end
+
+		if (reset) begin
+			{p0ec, p1ec, m0ec, m1ec, blec} <= 10'd0;
+			hmove_cnt <= 0;
 		end
 	end
 
@@ -390,571 +785,1050 @@ endmodule
 
 module playfield
 (
-	input clk,
-	input reset,
-	input HP1,
-	input HP2, // Horizontal clock phase 2
-	input cc,
-	input reflect, // Control playfield, 1 makes right half mirror image
-	input cnt,   // center signal, high means right half
-	input rhb,
-	input [19:0] pfc, // Combined playfield registers
-	output logic pf
+	input         clk,     // Master clock
+	input         reset,   // System reset
+	input logic   clkp,    // Pixel Clock
+	input clock_t hclk,    // Horizontal clock phase 2
+	input         reflect, // Control playfield, 1 makes right half mirror image
+	input         cnt,     // center signal, high means right half
+	input         rhb,     // Reset HBlank signal
+	input [19:0]  pfc,     // Combined playfield registers
+	output logic  pf       // Playfield graphics
 );
 
-logic [4:0] pf_index;
+	logic [4:0] pf_index, pf_next, pf_latch2, pf_latch1;
+	logic pf_1, pf_2, pf_3;
 
-// Outputs in order PF0 4..7, PF1 7:0, PF2 0:7
-logic [4:0] index_lut[20];
-assign index_lut = '{
-	5'd00, 5'd01, 5'd02, 5'd03,                             // PF0
-	5'd11, 5'd10, 5'd09, 5'd08, 5'd07, 5'd06, 5'd05, 5'd04, // PF1 in reverse
-	5'd12, 5'd13, 5'd14, 5'd15, 5'd16, 5'd17, 5'd18, 5'd19  // PF2
-};
+	// Outputs in order PF0 4..7, PF1 7:0, PF2 0:7
+	logic [4:0] index_lut[20];
 
-always @(posedge clk) begin : pf_block
+	wire pf_reset = rhb || (cnt && ~reflect);
+	wire pf_reflect = (cnt && reflect);
+
+	assign index_lut = '{
+		5'd00, 5'd01, 5'd02, 5'd03,                             // PF0
+		5'd11, 5'd10, 5'd09, 5'd08, 5'd07, 5'd06, 5'd05, 5'd04, // PF1 in reverse
+		5'd12, 5'd13, 5'd14, 5'd15, 5'd16, 5'd17, 5'd18, 5'd19  // PF2
+	};
+
+	logic [4:0] pf_latch;
 	logic dir;
-	// The first half of the screen should draw from left to right in a strange order:
-	// PF0[7:4], PF1[0:7], PF2[7:0] Note that PF1 is drawn backwards.
-	// PF0     PF1         PF2
-	// 4567 <- 76543210 <- 01234567
 
-	if (cc)
-		pf <= pfc[index_lut[pf_index]];
+	assign pf_index = pf_reset ? 1'd0 : (hclk.level_p2 ? pf_latch1 : pf_latch2);
+	assign pf_next = dir ? (|pf_index ? pf_index - 1'd1 : 5'd0) : (pf_index < 19 ? pf_index + 1'd1 : 5'd19);
 
-	if (HP2) begin
-		if (dir && |pf_index)
-			pf_index <= pf_index - 5'd1;
-		else if (~dir && pf_index < 19)
-			pf_index <= pf_index + 5'd1;
+	assign pf_1 = pfc[index_lut[pf_index]];
 
-		if (cnt && reflect)
-			dir <= 1;
+	f_cell pf_out
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (clkp),
+		.s_n        (~pf_3),
+		.r_n        (pf_3),
+		.q          (pf),
+		.q_n        ()
+	);
 
-		if (rhb || (cnt && ~reflect)) begin
-			dir <= 0;
-			pf_index <= 0;
+	sr_latch dir_l
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.r          (pf_reset),
+		.s          (pf_reflect),
+		.q          (dir),
+		.q_n        ()
+	);
+
+	inverter_reg pf1_ir(clk, reset, hclk.level_p1, pf_1, pf_2);
+	inverter_reg pf2_ir(clk, reset, hclk.level_p2, pf_2, pf_3);
+
+	always @(posedge clk) begin : pf_block
+		if (hclk.level_p1) begin
+			pf_latch1 <= pf_next;
+		end
+
+		if (hclk.level_p2) begin
+			pf_latch2 <= pf_latch1;
 		end
 	end
-
-	if (reset) begin
-		dir <= 0;
-		pf_index <= 0;
-		pf <= 0;
-	end
-end
 
 endmodule
 
 /////////////////////////////////////////////////////////////////////////////////////////
-module player_o
+module object_tick
 (
 	input clk,
-	input motck,
-	input enable,
-	input resp,
 	input reset,
-	input delay,
-	input [7:0] grp,
-	input [7:0] grpo,
-	input refp, // Player reflect
-	input [2:0] size,
-	output m_rst,
-	output p
+	input motck,
+	input ec,
+	output tick
 );
+	// The reason for signal this centers around an analog delay of around 21ns which causes an
+	// extra clock edge to form if the hmove counter is glitched into remaining on during non-hblank
+	// clocks. This was discovered by Crispy and is available in this topic here:
+	// https://atariage.com/forums/topic/261596-cosmic-ark-star-field-revisited/
+	logic old_motck, old_ec;
 
-logic [5:0] lfsr;
-logic start;
-
-logic PP0, PP1, PP1_edge; // Player clocks
-logic scan_clk;
-logic [1:0] player_div;
-logic fstob;
-logic [2:0] scan_out;
-
-logic ce;
-logic scan_en;
-assign PP0 = player_div == 0;
-assign PP1_edge = player_div == 2;
-assign PP1 = player_div == 3;
-assign ce = motck && enable;
-assign m_rst = fstob && scan_out == 1;
-
-
-always_ff @(posedge clk) begin
-	if (ce) begin
-		//{PP0, PP1} <= 0;
-		player_div <= player_div + 2'd1;
-
-		scan_clk <=
-			(~(size == 3'b111) && ~(size == 3'b101)) ||
-			(PP1 && ((size == 3'b111) || (size == 3'b101))) ||
-			(PP0 && (size == 3'b101));
-
-		if (PP1_edge) begin
-			lfsr <= {~((lfsr[1] && ~lfsr[0]) || ~(lfsr[1] || ~lfsr[0])), lfsr[5:1]};
-			if (lfsr == 6'b111111 || lfsr == 6'b101101)
-				lfsr <= 0;
-			if  ((lfsr == 6'b101101) ||
-				((lfsr == 6'b111000) && ((size == 3'b001) || (size == 3'b011))) ||
-				((lfsr == 6'b101111) && ((size == 3'b011) || (size == 3'b010) || (size == 3'b110))) ||
-				((lfsr == 6'b111001) && ((size == 3'b100) || (size == 3'b110)))) begin
-				start <= 1;
-				if (lfsr == 6'b101101)
-					fstob <= 1;
-				else
-					fstob <= 0;
-			end else begin
-				start <= 0;
-			end
+	wire edge_miss = (old_motck && ~motck) && (~old_ec && ec);
+	assign tick = (motck || ec) && ~edge_miss;
+	always @(posedge clk) begin
+		old_motck <= motck;
+		old_ec <= ec;
+		if (reset) begin
+			old_motck <= 0;
+			old_ec <= 0;
 		end
-
-		if (scan_clk) begin
-			if (start)
-				scan_en <= 1;
-			else if (scan_out == 3'b111)
-				scan_en <= 0;
-
-			if (scan_en)
-				scan_out <= scan_out + 1'b1;
-		end
-end
-
-	if (resp || reset) begin
-		lfsr <= 0;
-		player_div <= 0;
 	end
-end
-
-logic [2:0] scan_adr;
-logic [1:0] pix_sel;
-
-assign scan_adr = refp ? scan_out : ~scan_out;
-//assign scan_cnt = scan_en & scan_clk & count;
-assign pix_sel = {scan_en, delay};
-assign p = pix_sel == 2'b10 ? grp[scan_adr] : pix_sel == 2'b11 ? grpo[scan_adr] : 1'b0;
-
-
 
 endmodule
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-module missile_o
+module ball
 (
-	input clk,
-	input ce,
-	input resm,
-	input resmp,
-	input hmove,
-	input enam,
-	input [1:0] size,
-	output m
+	input       clk,         // Master Clock
+	input       reset,       // System Reset
+	input       clkp,        // Pixel Clock
+	input       motck,       // Motion Clock (real clock)
+	input       blec,        // Ball extra clock
+	input       blre,        // Ball reset signal
+	input       blen,        // Ball enable register
+	input       blen_o,      // Ball enable register (last)
+	input       blvd,        // Ball vdel
+	input [1:0] blsiz,       // Ball size register
+	output      bl           // Ball graphics output
 );
+	clock_t objclk;
 
-// logic [5:0] lfsr;
-// logic start;
+	logic [1:0] d1l_1, d1l_2;
+	logic [5:0] lfsr;
+	logic fc1_qn;
+	logic q_or_res;
 
-// logic PP0, PP1, PP1_edge; // Player clocks
-// logic scan_clk;
-// logic [1:0] player_div;
-// logic fstob;
-// logic [2:0] scan_out;
+	wire object_tick;
+	wire object_reset = (lfsr == 6'b111111 || lfsr == 6'b101101 || q_or_res);
 
-// logic ce;
-// logic scan_en;
-// assign PP0 = player_div == 1;
-// assign PP1_edge = player_div == 2;
-// assign PP1 = player_div == 3;
-// assign ce = motck & enable;
+	object_tick bl_tick
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.motck      (motck),
+		.ec         (blec),
+		.tick       (object_tick)
+	);
 
-// always_ff @(posedge clk) begin
-// 	if (ce) begin
-// 		player_div <= player_div + 2'd1;
+	f_counter_ll object_counter
+	(
+		.clk        (clk),
+		.reset      (blre),
+		.sys_reset  (reset),
+		.tick       (object_tick),
+		.clock      (objclk),
+		.f1_qn      (fc1_qn),
+		.f1_q_l     (q_or_res)
+	);
 
-// 		if (PP1_edge) begin
-// 			lfsr <= {~((lfsr[1] & ~lfsr[0]) | ~(lfsr[1] | ~lfsr[0])), lfsr[5:1]};
-// 			if (lfsr == 6'b111111 || lfsr == 6'b101101)
-// 				lfsr <= 0;
-// 			if  ((lfsr == 6'b101101) ||
-// 				((lfsr == 6'b111000) && ((size == 3'b001) || (size == 3'b011))) ||
-// 				((lfsr == 6'b101111) && ((size == 3'b011) || (size == 3'b010) || (size == 3'b110))) ||
-// 				((lfsr == 6'b111001) && ((size == 3'b100) || (size == 3'b110)))) begin
-// 				start <= 1;
-// 				if (lfsr == 6'b101101)
-// 					fstob <= 1;
-// 				else
-// 					fstob <= 0;
-// 			end else begin
-// 				start <= 0;
-// 			end
-// 		end
-// 	end
-// end
+	lfsr_6 object_lfsr
+	(
+		.clk       (clk),
+		.phi1      (objclk.level_p1),
+		.phi2      (objclk.level_p2),
+		.reset     (~d1l_1[1]),
+		.sys_reset (reset),
+		.lfsr      (lfsr)
+	);
+
+	wire gr1  = ~((~blvd && blen) || (blvd && blen_o));
+	wire gr2a = ~(~blsiz[1] || ~blsiz[0] || d1l_2[1] || gr1);
+	wire gr2b = ~(~blsiz[0] || fc1_qn);
+	wire gr3  = ~(blsiz[1] || gr2b || objclk.level_p2);
+	wire gr4  = ~(gr1 || gr3 || d1l_1[1]);
+	wire gr5 = ~(gr2a || gr4);
+
+	f_cell ball_out
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (clkp),
+		.s_n        (gr5),
+		.r_n        (~gr5),
+		.q          (bl),
+		.q_n        ()
+	);
+
+	d_cell obj_1
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.phi1       (objclk.level_p1),
+		.phi2       (objclk.level_p2),
+		.in         (~object_reset),
+		.out        (d1l_1[1])
+	);
+
+	d_cell obj_2
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.phi1       (objclk.level_p1),
+		.phi2       (objclk.level_p2),
+		.in         (d1l_1[1]),
+		.out        (d1l_2[1])
+	);
 
 endmodule
 
 /////////////////////////////////////////////////////////////////////////////////////////
-
-module ball_o
+module missile
 (
-	input clk,
-	input cc,
-	input delay,
-	input enabl, // Enaball, get it ena..ball.. It was funnier in the 70s.
-	input resbl,
-	input hblank,
-	input [1:0] size,
-	output bl
+	input       clk,        // Master Clock
+	input       reset,      // System Reset
+	input       clkp,       // Pixel clock
+	input       motck,      // Motion Clock (real clock)
+	input       mec,        // Missile extra clock
+	input       mre,        // Missile reset signal
+	input       men,        // Missile enable register
+	input [5:0] nusiz,      // Player/missile size
+	output      m           // Missile graphics output
 );
 
-// logic [5:0] lfsr_bl;
+	clock_t objclk;
 
-// always @(posedge clk) if (resbl) begin
-// end else begin
-// 	lfsr_bl <= {~(~(lfsr_bl[1] | lfsr_bl[0]) | (lfsr_bl[0] & lfsr_bl[1])), lfsr_bl[5:1]};
-// end
+	logic [1:0] d1l_1, d1l_2;
+	logic [5:0] lfsr;
+	logic fc1_qn;
+	logic or_d;
 
-logic [5:0] lfsr;
-logic start, start_last;
+	wire object_tick;
+	wire [1:0] m_size_n = ~nusiz[5:4];
+	wire [2:0] ns_sel = nusiz[2:0];
+	wire q_or_res;
+	wire object_reset = (lfsr == 6'b111111 || lfsr == 6'b101101 || q_or_res);
+	wire object_draw = (lfsr == 6'b101101) ||
+		((lfsr == 6'b111000) && ((ns_sel == 3'b001) || (ns_sel == 3'b011))) ||
+		((lfsr == 6'b101111) && ((ns_sel == 3'b011) || (ns_sel == 3'b010)   || (ns_sel == 3'b110))) ||
+		((lfsr == 6'b111001) && ((ns_sel == 3'b100) || (ns_sel == 3'b110)));
 
-logic P0, P1; // Ball clocks
-logic [1:0] div;
+	object_tick m_tick
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.motck      (motck),
+		.ec         (mec),
+		.tick       (object_tick)
+	);
 
-assign bl = 0;//(start && (size[1] | P1 | (div == 2 && size == 3))) || (start_last && size == 3);
+	f_counter_ll object_counter
+	(
+		.clk        (clk),
+		.reset      (mre),
+		.sys_reset  (reset),
+		.tick       (object_tick),
+		.clock      (objclk),
+		.f1_qn      (fc1_qn),
+		.f1_q_l     (q_or_res)
+	);
 
-always_ff @(posedge clk) begin
-	{P0, P1} <= 0;
+	lfsr_6 object_lfsr
+	(
+		.clk       (clk),
+		.phi1      (objclk.level_p1),
+		.phi2      (objclk.level_p2),
+		.reset     (or_d),
+		.sys_reset (reset),
+		.lfsr      (lfsr)
+	);
 
-	if (cc && enabl) begin
-		div <= div + 2'd1;
-		if (div == 3)
-			P0 <= 1;
-		if (div <= 1)
-			P1 <= 1;
-	end
+	wire mg1  = ~(fc1_qn || m_size_n[0]);
+	wire mg2a = ~(mg1 || objclk.level_p2 || ~m_size_n[1]);
+	wire mg2b = ~(~men || m_size_n[1] || d1l_2[1] || m_size_n[0]);
+	wire mg3  = ~(mg2a || ~men || d1l_1[1]);
+	wire mg4  = ~(mg3 || mg2b);
 
-	if (P1) begin
-		lfsr <= {~(~(lfsr[1] || lfsr[0]) || (~lfsr[0] && lfsr[1])), lfsr[5:1]};
-		start_last <= start;
-		if (lfsr == 6'b111111) // Error
-			lfsr <= 0;
+	f_cell mis_out
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (clkp),
+		.s_n        (mg4),
+		.r_n        (~mg4),
+		.q          (m),
+		.q_n        ()
+	);
 
-		if (lfsr == 6'b101101) begin
-			lfsr <= 0;
-			start <= 1;
-		end else begin
-			start <= 0;
-		end
-	end
+	d_cell obj_1
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.phi1       (objclk.level_p1),
+		.phi2       (objclk.level_p2),
+		.in         (object_reset),
+		.out        (or_d)
+	);
 
-	if (resbl) begin
-		lfsr <= 0;
-	end
-end
+	d_cell obj_2
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.phi1       (objclk.level_p1),
+		.phi2       (objclk.level_p2),
+		.in         (~object_draw),
+		.out        (d1l_1[1])
+	);
+
+	d_cell obj_3
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.phi1       (objclk.level_p1),
+		.phi2       (objclk.level_p2),
+		.in         (d1l_1[1]),
+		.out        (d1l_2[1])
+	);
 
 endmodule
 
+/////////////////////////////////////////////////////////////////////////////////////////
+module player
+(
+	input       clk,        // Master Clock
+	input       reset,      // System Reset
+	input       clkp,       // Pixel Clock
+	input       motck,      // Motion Clock (real clock)
+	input       pec,        // Player extra clock
+	input       pre,        // Player reset signal
+	input       pvdel,      // Player Vertical Delay
+	input       m2pr,       // Missile To Player Reset Enabled
+	input       pref,       // player reflect
+	input [5:0] nusiz,      // Player size
+	input [7:0] grpnew,     // Player graphic (new)
+	input [7:0] grpold,     // Player graphic (delayed)
+	output      msrst,      // Missile to player reset signal
+	output      p           // Player graphics output
+);
+	clock_t objclk;
 
+	logic [1:0] d1l_1, d1l_2;
+	logic [5:0] lfsr;
+	logic fstob;
+	logic fc1_qn;
+	logic ena_n;
+	logic start_n;
+	logic f_psc1_q, f_psc1_q_n, f_psc2_q, f_psc2_q_n, f_psc3_q, f_psc3_q_n;
+	logic go_n;
+	logic or_d;
+	logic [2:0] gs;
+
+	wire object_tick;
+	wire [2:0] ns_sel = nusiz[2:0];
+	wire q_or_res;
+	wire object_reset = (lfsr == 6'b111111 || lfsr == 6'b101101 || q_or_res);
+	wire object_fstob =
+		((lfsr == 6'b111000) && ((ns_sel == 3'b001) || (ns_sel == 3'b011))) ||
+		((lfsr == 6'b101111) && ((ns_sel == 3'b011) || (ns_sel == 3'b010)   || (ns_sel == 3'b110))) ||
+		((lfsr == 6'b111001) && ((ns_sel == 3'b100) || (ns_sel == 3'b110)));
+
+	wire object_draw = (lfsr == 6'b101101) || object_fstob;
+	wire pns = ~(~nusiz[0] || ~nusiz[2]);
+	wire pns2 = objclk.level_p1 && ~nusiz[1];
+	wire count_n = ~(~pns || pns2 || objclk.level_p2);
+	wire stop = ~(f_psc1_q_n || f_psc2_q_n || f_psc3_q_n);
+	wire start_stop = ~(start_n && stop);
+	wire newgrp = grpnew[gs];
+	wire oldgrp = grpold[gs];
+
+	assign msrst = ~(fstob || ena_n || object_tick || f_psc3_q || f_psc2_q || f_psc1_q_n || ~m2pr);
+	assign gs[0] = ~((pref && f_psc1_q_n) || (~pref && f_psc1_q));
+	assign gs[1] = ~((pref && f_psc2_q_n) || (~pref && f_psc2_q));
+	assign gs[2] = ~((pref && f_psc3_q_n) || (~pref && f_psc3_q));
+
+	object_tick p_tick
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.motck      (motck),
+		.ec         (pec),
+		.tick       (object_tick)
+	);
+
+	f_counter_ll object_counter
+	(
+		.clk        (clk),
+		.reset      (pre),
+		.sys_reset  (reset),
+		.tick       (object_tick),
+		.clock      (objclk),
+		.f1_qn      (fc1_qn),
+		.f1_q_l     (q_or_res)
+	);
+
+	lfsr_6 object_lfsr
+	(
+		.clk       (clk),
+		.phi1      (objclk.level_p1),
+		.phi2      (objclk.level_p2),
+		.reset     (or_d),
+		.sys_reset (reset),
+		.lfsr      (lfsr)
+	);
+
+	wire pl_1a = ~(go_n || ~oldgrp || ~pvdel);
+	wire pl_1b = ~(go_n || ~newgrp || pvdel);
+	wire pl_2 = ~(pl_1a || pl_1b);
+
+	f_cell pl_out
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (clkp),
+		.s_n        (pl_2),
+		.r_n        (~pl_2),
+		.q          (p),
+		.q_n        ()
+	);
+
+	d_cell obj_reset
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.phi1       (objclk.level_p1),
+		.phi2       (objclk.level_p2),
+		.in         (object_reset),
+		.out        (or_d)
+	);
+
+	d_cell obj_start
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.phi1       (objclk.level_p1),
+		.phi2       (objclk.level_p2),
+		.in         (~object_draw),
+		.out        (start_n)
+	);
+
+	d_cell obj_fstob
+	(
+		.clk        (clk),
+		.reset      (reset || or_d),
+		.phi1       (objclk.level_p1),
+		.phi2       (objclk.level_p2),
+		.in         (fstob || object_fstob),
+		.out        (fstob)
+	);
+
+	f_cell f_ena
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (object_tick),
+		.s_n        (count_n),
+		.r_n        (~count_n),
+		.q          (),
+		.q_n        (ena_n)
+	);
+
+	f_cell f_go
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (object_tick),
+		.s_n        (ena_n || start_n),
+		.r_n        (ena_n || start_stop),
+		.q          (),
+		.q_n        (go_n)
+	);
+
+	wire ena_n_or_go_n = (ena_n || go_n);
+
+	f_cell f_psc1
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (object_tick),
+		.s_n        (ena_n_or_go_n || f_psc1_q),
+		.r_n        (ena_n_or_go_n || f_psc1_q_n),
+		.q          (f_psc1_q),
+		.q_n        (f_psc1_q_n)
+	);
+
+	wire ena_n_or_go_2 = (ena_n_or_go_n || f_psc1_q_n);
+
+	f_cell f_psc2
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (object_tick),
+		.s_n        (ena_n_or_go_2 || f_psc2_q),
+		.r_n        (ena_n_or_go_2 || f_psc2_q_n),
+		.q          (f_psc2_q),
+		.q_n        (f_psc2_q_n)
+	);
+
+	wire ena_n_or_go_3 = (ena_n_or_go_2 || f_psc2_q_n);
+
+	f_cell f_psc3
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (object_tick),
+		.s_n        (ena_n_or_go_3 || f_psc3_q),
+		.r_n        (ena_n_or_go_3 || f_psc3_q_n),
+		.q          (f_psc3_q),
+		.q_n        (f_psc3_q_n)
+	);
+
+endmodule
 
 /////////////////////////////////////////////////////////////////////////////////////////
 module priority_encoder
 (
-	input clk,
-	input ce,
-	input p0,
-	input m0,
-	input p1,
-	input m1,
-	input pf,
-	input bl,
-	input blank,
-	input cntd, // 0 = left half, 1 = right half
-	input pfp,
-	input score,
-	output [3:0] col_select // {bk, pf, p1, p0}
+	input           clk,
+	input           ce,
+	input           p0,
+	input           m0,
+	input           p1,
+	input           m1,
+	input           pf,
+	input           bl,
+	input           blank,
+	input           decomb,
+	input           cntd,
+	input           pfp,
+	input           score,
+	output [3:0]    col_select // {bk, pf, p1, p0}
 );
 
-// Normal priority:
-// 0: P0, M0
-// 1: P1, M1
-// 2: PF, BL
-// 3: BK
+	// Normal priority:
+	// 0: P0, M0
+	// 1: P1, M1
+	// 2: PF, BL
+	// 3: BK
 
-// PFP:
-// 0: PF, BL
-// 1: P0, M0
-// 2: P1, M1
-// 3: BK
+	// PFP:
+	// 0: PF, BL
+	// 1: P0, M0
+	// 2: P1, M1
+	// 3: BK
 
-// When a one is written into the score control bit, the playfield is forced
-// to take the color-lum of player 0 in the left half of the screen and player
-// 1 in the right half of the screen.
-logic right_side;
+	// When a one is written into the score control bit, the playfield is forced
+	// to take the color-lum of player 0 in the left half of the screen and player
+	// 1 in the right half of the screen.
+	logic rs_q;
+	logic rs_qn;
 
-always @(posedge clk) begin
-	if (cntd)
-		right_side <= 1;
-	else if (blank)
-		right_side <= 0;
-end
+	sr_latch center_delayed
+	(
+		.clk    (clk),
+		.reset  (),
+		.r      (blank),
+		.s      (cntd),
+		.q      (rs_q),
+		.q_n    (rs_qn)
+	);
 
-always_comb begin
-	casex ({pfp, (pf || bl), (p1 || m1), (p0 || m0)})
-		4'bX_001: col_select = 4'b0001;
-		4'bX_010: col_select = 4'b0010;
-		4'bX_011: col_select = 4'b0001;
-		4'bX_100: col_select = score ? (right_side ? 4'b0010 : 4'b0001) : 4'b0100;
-		4'b0_101: col_select = 4'b0001;
-		4'b0_110: col_select = 4'b0010;
-		4'b0_111: col_select = 4'b0001;
-		4'b1_101: col_select = score ? (right_side ? 4'b0010 : 4'b0001) : 4'b0100;
-		4'b1_110: col_select = score ? (right_side ? 4'b0010 : 4'b0001) : 4'b0100;
-		4'b1_111: col_select = score ? (right_side ? 4'b0010 : 4'b0001) : 4'b0100;
-		default: col_select = 4'b1000;
-	endcase
-end
+	wire score_n = ~score;
+	wire pfp_n = ~pfp;
+
+	wire pf_n = ~pf;
+	wire pf_nor_bl = ~(pf || bl);
+	wire pr_1a = ~(rs_q || pf_n || score_n);
+	wire pr_1b = ~(pf_n || score_n || rs_qn);
+	wire pr_2a = ~(p0 || m0 || pr_1a);
+	wire pr_2b = ~(p1 || m1 || pr_1b);
+	wire pr_2c = ~(pf_nor_bl || pfp_n);
+
+	wire sel_p0 = ~(blank || pr_2a || pr_2c);
+	wire sel_p1 = ~(blank || pr_2b || pr_2c || sel_p0);
+	wire sel_pf = ~(blank || pf_nor_bl || sel_p1 || sel_p0);
+	wire sel_bk = ~(blank || sel_pf || sel_p1 || sel_p0);
+
+	assign col_select = {sel_bk, sel_pf, sel_p1, sel_p0};
 
 endmodule
 
 /////////////////////////////////////////////////////////////////////////////////////////
 module audio_channel
 (
-	input clk,
-	input reset,
-	input ce,
-	input aud0,
-	input aud1,
-	input [3:0] volume,
-	input [4:0] freq,
-	input [3:0] audc,
-	output [3:0] audio
+	input           clk,
+	input           reset,
+	input           ce,
+	input           aud0,
+	input           aud1,
+	input  [3:0]    volume,
+	input  [4:0]    freq,
+	input  [3:0]    audc,
+	output [3:0]    audio
 );
 
-// Audio is quite a lot of convoluted wide nors and odd shifting, so
-// I just did it at gate level.
+	// Audio is quite a lot of convoluted wide nors and odd shifting, so
+	// I just got sick of trying to simplify it and did it at gate level.
 
-// Frequency divider area signals
-logic freq_clk;
-logic [4:0] freq_div;
-logic T1, T2;
+	// Frequency divider area signals
+	logic [4:0] freq_div, freq_latch, freq_next;
+	logic freq_match, freq_div1, freq_div2;
+	logic T1, T2;
 
-// Noise area signals
-logic [4:0] noise;
-logic noise_wnor_1;
-logic noise_wnor_2;
-logic nor1, nor2, nor3, nor4, nor5, nor6, nor7, nor8;
-logic and1, and2;
-logic noise0_latch_n;
-logic nor2_latch;
+	// Noise area signals
+	logic [4:0] noise, noise_latch, noise_next;
+	logic noise_wnor_1;
+	logic noise_wnor_2;
+	logic nor1, nor2, nor3, nor4, nor5, nor6, nor7, nor8;
+	logic and1, and2;
+	logic noise0_latch_n;
+	logic nor2_latch;
 
-// Pulse area signals
-logic [3:0] pulse;
-logic nor_a, nor_b, nor_c, nor_d, nor_e;
-logic pulse_bit;
-logic pulse_wnor_1;
-logic pulse_wnor_2;
-logic rnor1, rnor2, rnor3;
-logic rand1;
+	// Pulse area signals
+	logic nor_a, nor_b, nor_c, nor_d, nor_e;
+	logic pulse_bit;
+	logic pulse_wnor_1;
+	logic pulse_wnor_2;
+	logic rnor1, rnor2, rnor3;
+	logic rand1;
+	logic pulse3_q, pulse2_q, pulse1_q, pulse0_q;
+	logic pulse3_qn, pulse2_qn, pulse1_qn, pulse0_qn;
 
-// Frequency divider area logic
-assign T1 = aud0 && freq_clk;
-assign T2 = aud1 && freq_clk;
+	// Frequency divider area logic
+	assign freq_div = (aud1 ? (~freq_div2 ? 5'd0 : freq_next) : freq_latch);
+	assign freq_match = (freq == freq_div);
 
-// Noise area logic
-assign nor1 = ~|{~audc[1:0], noise0_latch_n};
-assign nor2 = ~|{nor1, ~audc[1], noise_wnor_1};
-assign nor3 = ~|{audc[1:0], pulse_wnor_1};
-assign nor4 = ~|audc[1:0];
-assign nor5 = ~|{~noise[2], nor4};
-assign nor6 = ~|{nor5, and1};
-assign nor7 = ~|{nor6, noise[0]};
-assign nor8 = ~|{nor_a, nor7, and2, noise_wnor_2};
+	inverter_reg freq_div01(clk, reset, aud0, ~freq_match, freq_div1);
+	inverter_reg freq_div02(clk, reset, aud1, freq_div1, freq_div2);
 
-assign and1 = nor4 && pulse[0];
-assign and2 = noise[0] && nor6;
+	assign T1 = ~|{~aud0, freq_div2};
+	assign T2 = ~|{~aud1, freq_div1};
 
-assign noise_wnor_1 = ~|{noise[4:2], ~noise[1], audc[0], ~audc[1]};
-assign noise_wnor_2 = ~|{noise, nor3};
+	// Noise area logic
+	assign nor1 = ~|{~audc[1:0], noise0_latch_n};
+	assign nor2 = ~|{nor1, ~audc[1], noise_wnor_1};
+	assign nor3 = ~|{audc[1:0], pulse_wnor_1};
+	assign nor4 = ~|audc[1:0];
+	assign nor5 = ~|{~noise[2], nor4};
+	assign nor6 = ~|{nor5, and1};
+	assign nor7 = ~|{nor6, noise[0]};
+	assign nor8 = ~|{nor_a, nor7, and2, noise_wnor_2};
 
-// Pulse area logic
-assign rnor1 = ~|{pulse_wnor_2, pulse[1]};
-assign rnor2 = ~|{pulse[1], pulse[0]};
-assign rnor3 = ~|{pulse_wnor_1, rnor2, rand1};
+	assign and1 = nor4 && pulse0_q;
+	assign and2 = noise[0] && nor6;
 
-assign rand1 = pulse[1] && pulse[0];
+	assign noise_wnor_1 = ~|{noise[4:2], ~noise[1], audc[0], ~audc[1]};
+	assign noise_wnor_2 = ~|{noise, nor3};
 
-assign nor_a = ~|audc;
-assign nor_b = ~|{audc[3:2], rnor3};
-assign nor_c = ~|{~audc[3:2], rnor1};
-assign nor_d = ~|{audc[3], ~audc[2], ~pulse[3]};
-assign nor_e = ~|{~audc[3], audc[2], noise0_latch_n};
+	// Pulse area logic
+	assign rnor1 = ~|{pulse_wnor_2, pulse1_q};
+	assign rnor2 = ~|{pulse1_q, pulse0_q};
+	assign rnor3 = ~|{pulse_wnor_1, rnor2, rand1};
 
-assign pulse_bit = ~|{nor_a, nor_b, nor_c, nor_d, nor_e};
+	assign rand1 = pulse1_q && pulse0_q;
 
-assign pulse_wnor_1 = ~|{~pulse[3], pulse[2], ~pulse[1], pulse[0]};
-assign pulse_wnor_2 = ~|pulse[3:1];
+	assign nor_a = ~|audc;
+	assign nor_b = ~|{audc[3:2], rnor3};
+	assign nor_c = ~|{~audc[3:2], rnor1};
+	assign nor_d = ~|{audc[3], ~audc[2], pulse3_qn};
+	assign nor_e = ~|{~audc[3], audc[2], noise0_latch_n};
 
-// Clocked registers
-always_ff @(posedge clk) begin
+	assign pulse_bit = ~|{nor_a, nor_b, nor_c, nor_d, nor_e};
 
-	if (aud0) begin
-		freq_clk <= 0;
-		freq_div <= freq_div + 1'd1;
-		if (freq_div >= freq) begin
-			freq_div <= 0;
-			freq_clk <= 1;
+	assign pulse_wnor_1 = ~|{pulse3_qn, pulse2_q, pulse1_qn, pulse0_q};
+	assign pulse_wnor_2 = ~|{pulse3_q, pulse2_q, pulse1_q};
+
+	inverter_reg noise0_latch(clk, reset, T1, ~noise[0], noise0_latch_n);
+	inverter_reg nor2_l(clk, reset, T1, nor2, nor2_latch);
+
+	wire pulse_clock = ~|{~T2, nor2_latch};
+
+	assign noise = T2 ? noise_next : noise_latch;
+
+	f_cell pulse_3
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (pulse_clock),
+		.s_n        (~pulse_bit),
+		.r_n        (pulse_bit),
+		.q          (pulse3_q),
+		.q_n        (pulse3_qn)
+	);
+	f_cell pulse_2
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (pulse_clock),
+		.s_n        (pulse3_q),
+		.r_n        (pulse3_qn),
+		.q          (pulse2_q),
+		.q_n        (pulse2_qn)
+	);
+	f_cell pulse_1
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (pulse_clock),
+		.s_n        (pulse2_q),
+		.r_n        (pulse2_qn),
+		.q          (pulse1_q),
+		.q_n        (pulse1_qn)
+	);
+	f_cell pulse_0
+	(
+		.clk        (clk),
+		.reset      (reset),
+		.tick       (pulse_clock),
+		.s_n        (pulse1_q),
+		.r_n        (pulse1_qn),
+		.q          (pulse0_q),
+		.q_n        (pulse0_qn)
+	);
+
+	always_ff @(posedge clk) begin
+
+		if (aud0)
+			freq_next <= freq_div + 1'd1;
+		if (aud1)
+			freq_latch <= ~freq_div2 ? 5'd0 : freq_next;
+		if (T1)
+			noise_next <= {~nor8, noise_latch[4:1]};
+		if (T2)
+			noise_latch <= noise_next;
+
+		if (reset) begin
+			freq_next <= 0;
+			freq_latch <= 0;
+			noise_latch <= 0;
+			noise_next <= 0;
 		end
+
 	end
 
-	if (T1) begin // aud0
-		noise0_latch_n <= ~noise[0];
-		nor2_latch <= nor2;
-	end
-
-	if (T2) begin // aud1
-		noise <= {~nor8, noise[4:1]};
-		if (~nor2_latch)
-			pulse <= {pulse_bit, ~pulse[3:1]};
-	end
-
-	if (reset) begin
-		noise0_latch_n <= 0;
-		nor2_latch <= 0;
-		noise <= 0;
-		pulse <= 0;
-	end
-
-end
-
-assign audio = pulse[0] ? volume : 4'd0;
+	assign audio = ~pulse0_qn ? volume : 4'd0;
 
 endmodule
 
+module video_stabilize
+(
+	input           clk,        // system clock
+	input           reset,      // System reset
+	input clock_t   oclk,       // Oscillator clock aka pixel clock or color clock
+	input [1:0]     mode,       // 00 = smart, 01 = fixed, 10 = none
+	input           vsync_in,   // Unmodified vsync signal
+	input           vblank_in,  // Umodified vblank signal
+	input           hsync_in,   // Unmodified hsync signal
+	input           hblank_in,  // Hblank signal with applicable system delays
+	output          vsync,
+	output          vblank,
+	output          auto_pal,
+	output          f1           // Indicates Odd field of interlaced video
+);
+	localparam ntsc_vb_end = 9'd19; // 19
+	localparam pal_vb_end = 9'd23; // 23
+	localparam ntsc_vb_start = 9'd240 + ntsc_vb_end; //9'd262;//9'd243;
+	localparam pal_vb_start = 9'd288 + pal_vb_end; //9'd312;//9'd288;
 
+
+	logic [8:0] v_count, total_lines, vsync_line, vsync_end_line;
+	logic [7:0] h_count;
+	logic old_hblank, old_vblank, old_hsync, old_vsync;
+	logic vsync_en, vsync_set, vblank_en, midline_sync, vsync_override, set_end;
+	logic [7:0] vsync_count, vblank_count, lines_from_vs;
+	logic [7:0] dot_count = 0;
+	logic vsync_emulate;
+
+//	wire vblank_start = ~old_vblank && vblank_in;
+//	wire vblank_end   = old_vblank && ~vblank_in;
+	wire hblank_start = ~old_hblank && hblank_in;
+	wire hblank_end   = old_hblank && ~hblank_in;
+	wire vsync_start  = ~old_vsync && vsync_in;
+//	wire vsync_end    = old_vsync && ~vsync_in;
+//	wire hsync_start  = ~old_hsync && hsync_in;
+//	wire hsync_end    = old_hsync && ~hsync_in;
+
+	assign vblank = |mode ? vblank_in : vblank_en;
+	assign vsync = |mode ? vsync_in : vsync_en;
+	assign f1 = 1'b0; // |mode ? 1'b0 : midline_sync; // I could never make this work productively
+	assign auto_pal = |mode ? 1'b0 : total_lines >= 290;
+
+	always_ff @(posedge clk) begin
+		old_hblank <= hblank_in;
+		old_vsync <= vsync_in;
+		if (&v_count) begin // Something is whack, emulate a signal
+			total_lines <= 9'd262;
+			vsync_override <= 1'd1;
+			vsync_emulate <= 1'd1;
+		end
+
+		// Base new lines on the horizontal LFSR reset
+		if (hblank_start) begin
+			v_count <= v_count + 1'd1;
+			if (v_count == (auto_pal ? pal_vb_end : ntsc_vb_end))
+				vblank_en <= 0;
+			if (v_count == (auto_pal ? pal_vb_start : ntsc_vb_start) || v_count == ((vsync_override ? vsync_line : total_lines) - 4'd4))
+				vblank_en <= 1;
+
+			if ((vsync_override && v_count == (vsync_line - 1'd1)) || vsync_set) begin
+				if (vsync_emulate)
+					v_count <= 0;
+				vsync_en <= 1;
+				vsync_set <= 0;
+				vblank_en <= 1;
+				if (~|vsync_count)
+					vsync_count <= 3'd3;
+			end
+			if (|vsync_count) begin
+				vsync_count <= vsync_count - 1'd1;
+				if (vsync_count == 1)
+					vsync_en <= 0;
+			end
+		end
+
+		if (oclk.edge_p1)
+			dot_count <= dot_count + 1'd1;
+		if (hblank_end)
+			dot_count <= 0;
+
+		if (vsync_start) begin
+			vsync_emulate <= 0;
+			if (v_count != total_lines) begin
+				vsync_set <= 1;
+				if (total_lines - v_count < 3'd4) begin
+					vsync_override <= 1;
+					vsync_line <= v_count;
+				end else if (v_count - total_lines < 3'd4) begin
+					vsync_override <= 1;
+					vsync_line <= total_lines;
+				end else begin
+					vsync_override <= 0;
+				end
+			end
+			if (~vsync_override) begin
+				vsync_set <= 1;
+			end
+			v_count <= 0;
+			total_lines <= v_count;
+
+			// if (dot_count > 15 && dot_count < 145) // Vsync outside of hblank can be considered invoking interlaced resolutions
+			// 	midline_sync <= 1;
+			// else
+			// 	midline_sync <= 0;
+		end
+
+		if (reset) begin
+			vsync_emulate <= 0;
+			dot_count <= 0;
+			vsync_set <= 0;
+			vsync_line <= 0;
+			vsync_override <= 0;
+			total_lines <= 9'd262;
+			v_count <= 0;
+			vblank_en <= 1;
+			vsync_en <= 0;
+		end
+
+	end
+
+endmodule
 
 /////////////////////////////////////////////////////////////////////////////////////////
-module TIA2
+module TIA
 (
 	// Original Pins
-	input        clk,
-	output       phi0,
-	input        phi2,
-	output logic phi1,
-	input        RW_n,
-	output logic rdy,
-	input  [5:0] addr,
-	input  [7:0] d_in,
-	output [7:0] d_out,
-	input  [3:0] i,     // On real hardware, these would be ADC pins. i0..3
-	output [3:0] i_out,
-	input        i4,
-	input        i5,
-	output [3:0] aud0,
-	output [3:0] aud1,
-	output [3:0] col,
-	output [2:0] lum,
-	output       BLK_n,
-	output       sync,
-	input        cs0_n,
-	input        cs2_n,
+	input           clk,
+	output          phi0,
+	input           phi2,
+	output logic    phi1,
+	input           RW_n,
+	output logic    rdy,
+	input  [5:0]    addr,
+	input  [7:0]    d_in,
+	output [7:0]    d_out,
+	input  [3:0]    i,     // On real hardware, these would be ADC pins. i0..3
+	output [3:0]    i_out,
+	input           i4,
+	input           i5,
+	output [3:0]    aud0,
+	output [3:0]    aud1,
+	output [3:0]    col,
+	output [2:0]    lum,
+	output          BLK_n,
+	output          sync,
+	input           cs0_n,
+	input           cs2_n,
 
 	// Abstractions
-	input        rst,
-	input        ce,     // Clock enable for CLK generation only
-	output       video_ce,
-	output       vblank,
-	output       hblank,
-	output       hgap,
-	output       vsync,
-	output       hsync,
-	output       phi2_gen,
-	input        phi1_in,
-	input [7:0]  open_bus,
-	input        decomb
+	input           rst,
+	input           ce,     // Clock enable for CLK generation only, should be 2x normal TIA clk
+	output          video_ce,
+	output          vblank,
+	output          hblank,
+	output          hgap,
+	output          vsync,
+	output          hsync,
+	input           phi1_in,
+	input [7:0]     open_bus,
+	input           is_7800,
+	input           decomb,
+	output logic    cart_ce,
+	output logic    [9:0] row,
+	output logic    [9:0] column,
+	output          is_pal,
+	output          is_f1,
+	input           stabilize,
+	output  [3:0]   paddle_read // Helper to let us autodetect paddles
 );
 
 logic [7:0] wreg[64]; // Write registers. Only 44 are used.
 logic [7:0] rreg[16]; // Read registers.
-logic rdy_latch; // buffer for the rdy signal
-logic [14:0] collision;
 
-logic [7:0] read_val;
-logic cs;  // Chip Select (cs1 and 3 were NC)
-logic phase; // 0 = phi0, 1 = phi2
+logic cs; // Chip Select (cs1 and 3 were NC)
 logic wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr; // Strobe register signals
 logic [3:0] color_select;
 logic p0, p1, m0, m1, bl, pf; // Current object active flags
-logic aclk0, aclk1, cntd, cnt;
-logic HP1, HP2; // Horizontal phase clocks
-logic cc; // Color Clock (original oscillator speed)
-logic rhb, shb, wsr, shbd; // Hblank triggers
+logic aclk0, aclk1, rhb, shb, cnt, cntd; // horizontal triggers
 logic sec;
+logic hblank_o, vblank_o, vsync_o, hgap_o; // Original video timing signals
+logic msrst0, msrst1; // Missile/player reset signals
+logic p0ec, p1ec, m0ec, m1ec, blec; // HMOVE Extra clock signals
+logic rsynl, rsynd; // Reset synchronization signals
+logic motck; // Motion Clock
+logic clkp;  // Pixel Clock
+logic hblank_d;
+logic blank;
+logic phi2_delay;
 
+logic old_hblank, old_vsync;
+logic [1:0] vsync_count;
+logic hgap_1;
+
+clock_t hclk;
+clock_t pclk;
+clock_t oclk;
+
+assign phi0 = pclk.edge_p2;
+assign phi1 = pclk.edge_p1;
 assign cs = ~cs0_n && ~cs2_n;
-assign video_ce = cc;
-
-//assign d_out[5:0] = 6'h00;
-assign BLK_n = ~(hblank || vblank);
+assign video_ce = oclk.edge_p2;
+assign BLK_n = blank;
 assign sync = ~(hsync || vsync);
-assign vsync = wreg[VSYNC][1];
-assign vblank = wreg[VBLANK][1];
-
-// Address Decoder
-// Register writes happen when Phi2 falls, or in our context, when Phi0 rises.
-// Register reads happen when Phi2 is high. This is relevant in particular to RIOT which is clocked on Phi2.
-
-logic [7:0] last_bus_value;
-
-// Read port masks
-logic [1:0] rpm [16];
-assign rpm = '{
-	2'b11, 2'b11, 2'b11, 2'b11, 2'b11, 2'b11,
-	2'b10,
-	2'b11,
-	2'b10, 2'b10, 2'b10, 2'b10, 2'b10, 2'b10,
-	2'b00, 2'b00
-};
-
+assign vsync_o = wreg[VSYNC][1];
+assign vblank_o = wreg[VBLANK][1];
 assign d_out[5:0] = open_bus[5:0];
+assign cart_ce = oclk.edge_p2;
+assign motck = ~oclk.clock & ~hblank_d;
+assign clkp = ~oclk.clock;
+
+f_cell hgap1_out
+(
+	.clk        (clk),
+	.reset      (rst),
+	.tick       (oclk.level_p1),
+	.s_n        (~hgap_o),
+	.r_n        (hgap_o),
+	.q          (hgap_1),
+	.q_n        ()
+);
+
+f_cell hgap_out
+(
+	.clk        (clk),
+	.reset      (rst),
+	.tick       (oclk.level_p1),
+	.s_n        (~hgap_1),
+	.r_n        (hgap_1),
+	.q          (hgap),
+	.q_n        ()
+);
+
+f_cell hblank_out
+(
+	.clk        (clk),
+	.reset      (rst),
+	.tick       (oclk.level_p1),
+	.s_n        (~hblank_o),
+	.r_n        (hblank_o),
+	.q          (hblank),
+	.q_n        ()
+);
+
+f_cell blank_out
+(
+	.clk        (clk),
+	.reset      (rst),
+	.tick       (oclk.level_p1),
+	.s_n        (~(~hblank_o && ~vblank_o)),
+	.r_n        ((~hblank_o && ~vblank_o)),
+	.q          (),
+	.q_n        (blank)
+);
+
+video_stabilize stab
+(
+	.clk        (clk),
+	.reset      (rst),
+	.oclk       (oclk),
+	.mode       (stabilize),
+	.vsync_in   (vsync_o),
+	.vblank_in  (vblank_o),
+	.hsync_in   (hsync),
+	.hblank_in  (hgap),
+	.vsync      (vsync),
+	.vblank     (vblank),
+	.auto_pal   (is_pal),
+	.f1         (is_f1)
+);
+
 
 always_ff @(posedge clk) begin
-	if (phi1_in)
-		phase <= 0;
-	if (phi2)
-		phase <= 1;
+	old_hblank <= hblank_o;
+	old_vsync <= vsync_o;
+	hblank_d <= hblank_o;
+	if (oclk.edge_p1)
+		column <= column + 1'd1;
+	if (old_hblank && !hblank_o) begin
+		column <= 0;
+		row <= row + 1'd1;
+	end
+	if (old_vsync && !vsync_o)
+		row <= 0;
 end
 
-always @(posedge clk) begin
+// Reads and writes
+// NOTE: A realistic attempt at bus stuffing might need the registers to be set in a combinational
+// way, but otherwise using the clock enable signal keeps the timings valid.
+always_ff @(posedge clk) begin
+	phi2_delay <= pclk.level_p2; // Phi2 analog delay
 	i_out <= {4{~wreg[VBLANK][7]}};
-	if (phase) begin
+	if (pclk.edge_p2 || pclk.level_p2) begin
 		if (cs && RW_n) begin
 			if (addr[3:0] == INPT4 && ~wreg[VBLANK][6]) begin
-				d_out[7:6] <= {i4, 1'b0} | (open_bus[7:6] & ~rpm[addr[3:0]]);
+				d_out[7:6] <= {i4, 1'b0};
 			end else if (addr[3:0] == INPT5 && ~wreg[VBLANK][6]) begin
-				d_out[7:6] <= {i5, 1'b0} | (open_bus[7:6] & ~rpm[addr[3:0]]);
+				d_out[7:6] <= {i5, 1'b0};
 			end else if (~&addr[3:1]) begin
-				d_out[7:6] <= rreg[addr[3:0]][7:6] | (open_bus[7:6] & ~rpm[addr[3:0]]); // reads only use the lower 4 bits of addr
+				d_out[7:6] <= rreg[addr[3:0]][7:6]; // reads only use the lower 4 bits of addr
 			end else
-				d_out[7:6] <= 0;
+				d_out[7:6] <= 2'd0;
 		end
-	end
-	if (rst)
-		d_out[7:6] <= 0;
-
-	if (cs && ~RW_n && addr <= 6'h2C) begin
-		if (phase)
+		if (cs && ~RW_n && addr <= 6'h2C) begin
 			wreg[addr] <= d_in;
 
-		if (phi2) begin
 			if (addr == GRP0)
-				wreg[GRP0O] <= wreg[GRP0];
-			if (addr == GRP1)
 				wreg[GRP1O] <= wreg[GRP1];
-			if (addr == ENABL)
+			if (addr == GRP1) begin
+				wreg[GRP0O] <= wreg[GRP0];
 				wreg[ENBLO] <= wreg[ENABL];
+			end
 		end
+	end
 
+	// FIXME: Due to analog delays in the chip, it appears these signals need roughly a
+	// 50ish nanosecond delay. This may need adaptation if you use a different speed clock.
+	{hmclr, cxclr} <= '0;
+	if (~RW_n && phi2_delay && cs) begin
+		case(addr)
+			HMCLR: hmclr <= 1;
+			CXCLR: cxclr <= 1;
+			default: ;
+		endcase
 	end
 
 	if (hmclr) begin
@@ -965,302 +1839,270 @@ always @(posedge clk) begin
 		wreg[HMBL] <= 0;
 	end
 
-	if (rst)
+	if (rst) begin
+		d_out[7:6] <= 0;
 		wreg <= '{64{8'h00}};
-end
-
-// "Strobe" registers have an immediate effect
-always @(posedge clk) begin
-	{wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove,hmclr,cxclr} <= '0;
-	if (~RW_n && phase && cs) begin
-		case(addr)
-			WSYNC: wsync <= 1;
-			RSYNC: rsync <= 1;
-			RESP0: resp0 <= 1;
-			RESP1: resp1 <= 1;
-			RESM0: resm0 <= 1;
-			RESM1: resm1 <= 1;
-			RESBL: resbl <= 1;
-			HMOVE: hmove <= 1;
-			HMCLR: hmclr <= 1;
-			CXCLR: cxclr <= 1;
-			default: ;
-		endcase
+		wreg[VBLANK][1] <= 1;
 	end
 end
 
+// "Strobe" registers have an immediate effect
+always_comb begin
+	{wsync,rsync,resp0,resp1,resm0,resm1,resbl,hmove} = '0;
+	if (~RW_n && pclk.level_p2 && cs) begin
+		case(addr)
+			WSYNC: wsync = 1;
+			RSYNC: rsync = 1;
+			RESP0: resp0 = 1;
+			RESP1: resp1 = 1;
+			RESM0: resm0 = 1;
+			RESM1: resm1 = 1;
+			RESBL: resbl = 1;
+			HMOVE: hmove = 1;
+			default: ;
+		endcase
+	end
+	paddle_read = '0;
+	if (RW_n && pclk.level_p2 && cs) begin
+		paddle_read[0] = (addr[3:0] == INPT0);
+		paddle_read[1] = (addr[3:0] == INPT1);
+		paddle_read[2] = (addr[3:0] == INPT2);
+		paddle_read[3] = (addr[3:0] == INPT3);
+	end
+end
 
 // Submodules
-
-logic [7:0] uv_gen;
-logic vs_gen, vb_gen, hs_gen, hb_gen;
-logic p0ec, p1ec, m0ec, m1ec, blec;
-logic res0d;
-
 clockgen clockgen
 (
-	.clk      (clk),
-	.ce       (ce),
-	.CC       (cc),
-	.res0d    (res0d),
-	.phi0     (phi0),
-	.phi1     (phi1),
-	.phi2_gen (phi2_gen),
-	.rsync    (rsync),
-	.HP1      (HP1),
-	.HP2      (HP2),
-	.reset    (rst),
-	.phase    ()
+	.clk        (clk),
+	.is_7800    (is_7800),
+	.ce         (ce),
+	.reset      (rst),
+	.rsync      (rsync),
+	.rsynd      (rsynd),
+	.rsynl      (rsynl),
+	.pext_1     (phi1_in),
+	.pext_2     (phi2),
+	.pclk       (pclk),
+	.hclk       (hclk),
+	.oclk       (oclk)
 );
 
 horiz_gen h_gen
 (
-	.clk    (clk),
-	.rst    (rst),
-	.HP1    (HP1),
-	.HP2    (HP2),
-	.rsync  (rsync),
-	.hmove  (sec),
-	.hsync  (hsync),
-	.res0d  (res0d),
-	.hgap   (hgap),
-	.hblank (hblank),
-	.cntd   (cntd),
-	.cnt    (cnt),
-	.aud0   (aclk0),
-	.aud1   (aclk1),
-	.shb    (shb),
-	.rhb    (rhb),
-	.shbd   (shbd),
-	.wsr    (wsr)
+	.clk        (clk),
+	.rst        (rst),
+	.hclk       (hclk),
+	.rsynl      (rsynl),
+	.rsynd      (rsynd),
+	.sec        (sec),
+	.hsync      (hsync),
+	.hgap       (hgap_o),
+	.hblank     (hblank_o),
+	.cntd       (cntd),
+	.cnt        (cnt),
+	.aud0       (aclk0),
+	.aud1       (aclk1),
+	.shb        (shb),
+	.rhb        (rhb)
 );
 
 playfield playfield
 (
-	.clk(clk),
-	.reset(rst),
-	.HP1(HP1),
-	.HP2(HP2),
-	.cc (cc),
-	.rhb(rhb),
-	.reflect(wreg[CTRLPF][0]),
-	.cnt(cnt),
-	.pfc({wreg[PF2], wreg[PF1], wreg[PF0][7:4]}),
-	.pf(pf)
+	.clk        (clk),
+	.reset      (rst),
+	.clkp       (clkp),
+	.hclk       (hclk),
+	.rhb        (rhb),
+	.reflect    (wreg[CTRLPF][0]),
+	.cnt        (cnt),
+	.pfc        ({wreg[PF2], wreg[PF1], wreg[PF0][7:4]}),
+	.pf         (pf)
 );
 
 hmove_gen hmv
 (
-	.clk     (clk),
-	.cc      (cc),
-	.reset   (rst),
-	.sec     (sec),
-	.HP1     (HP1),
-	.HP2     (HP2),
-	.hmove   (hmove),
-	.hblank  (hblank),
-	.p0_m    (wreg[HMP0][7:4] & (hmclr ? 4'b0000 : 4'b111)),
-	.p1_m    (wreg[HMP1][7:4] & (hmclr ? 4'b0000 : 4'b111)),
-	.m0_m    (wreg[HMM0][7:4] & (hmclr ? 4'b0000 : 4'b111)),
-	.m1_m    (wreg[HMM1][7:4] & (hmclr ? 4'b0000 : 4'b111)),
-	.bl_m    (wreg[HMBL][7:4] & (hmclr ? 4'b0000 : 4'b111)),
-	.p0_mclk (p0ec),
-	.p1_mclk (p1ec),
-	.m0_mclk (m0ec),
-	.m1_mclk (m1ec),
-	.bl_mclk (blec)
-);
-// -- 	p0: work.player
-// -- 		port map(clk, p0_rst, p0_count, p0_nusiz, p0_reflect,
-// -- 					p0_grpnew, p0_grpold, p0_vdel, p0_mrst, p0_pix);
-logic msrst0, msrst1;
-
-// player_o player0
-// (
-// 	.clk     (clk),
-// 	.motck   (cc),
-// 	.enable  (p0ec),
-// 	.resp    (resp0),
-// 	.reset   (rst),
-// 	.delay   (wreg[VDELP0]),
-// 	.grp     (wreg[GRP0]),
-// 	.grpo    (wreg[GRP0O]),
-// 	.refp    (wreg[REFP0][3]),
-// 	.size    (wreg[NUSIZ0][2:0]),
-// 	.m_rst   (msrst0),
-// 	.p       (p0)
-// );
-
-// player_o player1
-// (
-// 	.clk     (clk),
-// 	.motck   (cc),
-// 	.enable  (p1ec),
-// 	.resp    (resp1),
-// 	.reset   (rst),
-// 	.delay   (wreg[VDELP1]),
-// 	.grp     (wreg[GRP1]),
-// 	.grpo    (wreg[GRP1O]),
-// 	.refp    (wreg[REFP1][3]),
-// 	.size    (wreg[NUSIZ1][2:0]),
-// 	.m_rst   (msrst1),
-// 	.p       (p1)
-// );
-
-
-player play1 (
-	.clk     (clk),
-	.prst    (resp0),
-	.count   (p0ec),
-	.nusiz   (wreg[NUSIZ0][2:0]),
-	.reflect (wreg[REFP0][3]),
-	.grpnew  (wreg[GRP0]),
-	.grpold  (wreg[GRP0O]),
-	.vdel    (wreg[VDELP0]),
-	.mrst    (msrst0),
-	.pix     (p0)
+	.clk        (clk),
+	.reset      (rst),
+	.sec        (sec),
+	.hclk       (hclk),
+	.oclk       (oclk),
+	.pclk       (pclk),
+	.hmove      (hmove),
+	.hblank     (hblank_o),
+	.p0_m       (hmclr ? 4'd0 : wreg[HMP0][7:4]),
+	.p1_m       (hmclr ? 4'd0 : wreg[HMP1][7:4]),
+	.m0_m       (hmclr ? 4'd0 : wreg[HMM0][7:4]),
+	.m1_m       (hmclr ? 4'd0 : wreg[HMM1][7:4]),
+	.bl_m       (hmclr ? 4'd0 : wreg[HMBL][7:4]),
+	.p0_mclk    (p0ec),
+	.p1_mclk    (p1ec),
+	.m0_mclk    (m0ec),
+	.m1_mclk    (m1ec),
+	.bl_mclk    (blec)
 );
 
-player play2 (
-	.clk     (clk),
-	.prst    (resp1),
-	.count   (p1ec),
-	.nusiz   (wreg[NUSIZ1][2:0]),
-	.reflect (wreg[REFP1][3]),
-	.grpnew  (wreg[GRP1]),
-	.grpold  (wreg[GRP1O]),
-	.vdel    (wreg[VDELP1]),
-	.mrst    (msrst1),
-	.pix     (p1)
+player pl1 (
+	.clk        (clk),
+	.reset      (rst),
+	.clkp       (clkp),
+	.motck      (motck),
+	.pec        (p0ec),
+	.pre        (resp0),
+	.pvdel      (wreg[VDELP0]),
+	.m2pr       (wreg[RESMP0][1]),
+	.pref       (wreg[REFP0][3]),
+	.nusiz      (wreg[NUSIZ0][5:0]),
+	.grpnew     (wreg[GRP0]),
+	.grpold     (wreg[GRP0O]),
+	.msrst      (msrst0),
+	.p          (p0)
+);
+
+player pl2 (
+	.clk        (clk),
+	.reset      (rst),
+	.clkp       (clkp),
+	.motck      (motck),
+	.pec        (p1ec),
+	.pre        (resp1),
+	.pvdel      (wreg[VDELP1]),
+	.m2pr       (wreg[RESMP1][1]),
+	.pref       (wreg[REFP1][3]),
+	.nusiz      (wreg[NUSIZ1][5:0]),
+	.grpnew     (wreg[GRP1]),
+	.grpold     (wreg[GRP1O]),
+	.msrst      (msrst1),
+	.p          (p1)
+);
+
+missile mis0 (
+	.clk        (clk),
+	.reset      (rst),
+	.clkp       (clkp),
+	.motck      (motck),
+	.mec        (m0ec),
+	.mre        (resm0 || (wreg[RESMP0][1] && msrst0)),
+	.men        (wreg[ENAM0][1] && ~wreg[RESMP0][1]),
+	.nusiz      (wreg[NUSIZ0][5:0]),
+	.m          (m0)
 );
 
 missile mis1 (
-	.clk    (clk),
-	.prst   (resm0 || (wreg[RESMP0][1] && msrst0)),
-	.count  (m0ec),
-	.enable (wreg[ENAM0][1]),
-	.nusiz  (wreg[NUSIZ0][2:0]),
-	.size   (wreg[NUSIZ0][5:4]),
-	.pix    (m0)
-);
-
-missile mis2 (
-	.clk    (clk),
-	.prst   (resm1 || (wreg[RESMP1][1] && msrst1)),
-	.count  (m1ec),
-	.enable (wreg[ENAM1][1]),
-	.nusiz  (wreg[NUSIZ1][2:0]),
-	.size   (wreg[NUSIZ1][5:4]),
-	.pix    (m1)
+	.clk        (clk),
+	.reset      (rst),
+	.clkp       (clkp),
+	.motck      (motck),
+	.mec        (m1ec),
+	.mre        (resm1 || (wreg[RESMP1][1] && msrst1)),
+	.men        (wreg[ENAM1][1] && ~wreg[RESMP1][1]),
+	.nusiz      (wreg[NUSIZ1][5:0]),
+	.m          (m1)
 );
 
 ball bal (
-	.clk   (clk),
-	.prst  (resbl),
-	.count (blec),
-	.ennew (wreg[ENABL][1]),
-	.enold (wreg[ENBLO][1]),
-	.vdel  (wreg[VDELBL]),
-	.size  (wreg[CTRLPF][5:4]),
-	.pix   (bl)
+	.clk        (clk),
+	.reset      (rst),
+	.clkp       (clkp),
+	.motck      (motck),
+	.blec       (blec),
+	.blre       (resbl),
+	.blen       (wreg[ENABL][1]),
+	.blen_o     (wreg[ENBLO][1]),
+	.blvd       (wreg[VDELBL]),
+	.blsiz      (wreg[CTRLPF][5:4]),
+	.bl         (bl)
 );
 
 priority_encoder prior
 (
-	.p0     (p0),
-	.m0     (m0),
-	.p1     (p1),
-	.m1     (m1),
-	.bl     (bl),
-	.pf     (pf),
-	.cntd   (cntd),
-	.blank  (hblank || vblank),
-	.pfp    (wreg[CTRLPF][2]),
-	.score  (wreg[CTRLPF][1]),
+	.clk        (clk),
+	.p0         (p0),
+	.m0         (m0),
+	.p1         (p1),
+	.m1         (m1),
+	.bl         (bl),
+	.pf         (pf),
+	.cntd       (cntd),
+	.blank      (blank),
+	.pfp        (wreg[CTRLPF][2]),
+	.score      (wreg[CTRLPF][1]),
 	.col_select (color_select)
 );
 
 audio_channel audio0
 (
-	.clk    (clk),
-	.reset  (rst),
-	.aud0   (aclk0),
-	.aud1   (aclk1),
-	.volume (wreg[AUDV0]),
-	.freq   (wreg[AUDF0]),
-	.audc   (wreg[AUDC0]),
-	.audio  (aud0)
+	.clk        (clk),
+	.reset      (rst),
+	.aud0       (aclk0),
+	.aud1       (aclk1),
+	.volume     (wreg[AUDV0]),
+	.freq       (wreg[AUDF0]),
+	.audc       (wreg[AUDC0]),
+	.audio      (aud0)
 );
 
 audio_channel audio1
 (
-	.clk    (clk),
-	.reset  (rst),
-	.aud0   (aclk0),
-	.aud1   (aclk1),
-	.volume (wreg[AUDV1]),
-	.freq   (wreg[AUDF1]),
-	.audc   (wreg[AUDC1]),
-	.audio  (aud1)
+	.clk        (clk),
+	.reset      (rst),
+	.aud0       (aclk0),
+	.aud1       (aclk1),
+	.volume     (wreg[AUDV1]),
+	.freq       (wreg[AUDF1]),
+	.audc       (wreg[AUDC1]),
+	.audio      (aud1)
 );
 
-
 // Select the correct output register
-always_comb begin
-	if (hblank || vblank)
-		{col, lum} = decomb ? wreg[COLUBK][7:1] : 7'd0; // My own innovation for modern displays, not part of the chip
+always_ff @(posedge clk) if (oclk.edge_p1) begin
+	if ((hblank || vblank_o))
+		{col, lum} <= decomb ? wreg[COLUBK][7:1] : 7'h0; // Blank non-visible areas
 	else begin
 		case (color_select)
-			4'b0001: {col, lum} = wreg[COLUP0][7:1];
-			4'b0010: {col, lum} = wreg[COLUP1][7:1];
-			4'b0100: {col, lum} = wreg[COLUPF][7:1];
-			4'b1000: {col, lum} = wreg[COLUBK][7:1];
-			default: {col, lum} = 7'd0;
+			4'b0001: {col, lum} <= wreg[COLUP0][7:1];
+			4'b0010: {col, lum} <= wreg[COLUP1][7:1];
+			4'b0100: {col, lum} <= wreg[COLUPF][7:1];
+			4'b1000: {col, lum} <= wreg[COLUBK][7:1];
+			default: {col, lum} <= 7'd0;
 		endcase
 	end
 end
 
 // WSYNC register controls the RDY signal to the CPU. It is cleared at the start of hblank.
-always_ff @(posedge clk) begin
-	if (wsync && cc)
-		rdy <= 0;
-
-	if (shb && cc)
-		rdy <= 1;
-
-	if (rst)
-		rdy <= 1;
-end
+wire rdy_q;
+assign rdy = ~rdy_q;
+sr_latch in_sr
+(
+	.clk        (clk),
+	.reset      (rst),
+	.r          (shb),
+	.s          (wsync),
+	.q          (rdy_q),
+	.q_n        ()
+);
 
 // Calculate the collisions
 
 always_ff @(posedge clk) begin : read_reg_block
-	logic [8:0] x;
-
-	if (cc) begin // FIXME: this should always be implicitly opposite phi2 for reads.
-		if (cxclr) begin
-			{rreg[CXM0P][7:6], rreg[CXM1P][7:6], rreg[CXP0FB][7:6],
-				rreg[CXP1FB][7:6], rreg[CXM0FB][7:6], rreg[CXM1FB][7:6],
-				rreg[CXBLPF][7:6], rreg[CXPPMM][7:6]} <= '0;
-		end else begin
-			rreg[CXM0P][7:6]  <= (rreg[CXM0P][7:6]  | {(m0 && p1), (m0 && p0)});
-			rreg[CXM1P][7:6]  <= (rreg[CXM1P][7:6]  | {(m1 && p0), (m1 && p1)});
-			rreg[CXP0FB][7:6] <= (rreg[CXM1P][7:6]  | {(p0 && pf), (p0 && bl)});
-			rreg[CXP1FB][7:6] <= (rreg[CXP1FB][7:6] | {(p1 && pf), (p1 && bl)});
-			rreg[CXM0FB][7:6] <= (rreg[CXM0FB][7:6] | {(m0 && pf), (m0 && bl)});
-			rreg[CXM1FB][7:6] <= (rreg[CXM1FB][7:6] | {(m1 && pf), (m1 && bl)});
-			rreg[CXBLPF][7:6] <= (rreg[CXBLPF][7:6] | {(bl && pf), 1'b0});
-			rreg[CXPPMM][7:6] <= (rreg[CXPPMM][7:6] | {(p0 && p1), (m0 && m1)});
-		end
-
-		for (x = 0; x < 4; x = x + 1'd1) begin
-			rreg[{2'b10, x[1:0]}][7] <= wreg[VBLANK][7] ? 1'b0 : i[x[1:0]];
-		end
+	if (cxclr) begin
+		{rreg[CXM0P][7:6], rreg[CXM1P][7:6], rreg[CXP0FB][7:6],
+			rreg[CXP1FB][7:6], rreg[CXM0FB][7:6], rreg[CXM1FB][7:6],
+			rreg[CXBLPF][7:6], rreg[CXPPMM][7:6]} <= '0;
+	end else if (oclk.level_p1 && ~vblank_o) begin
+		rreg[CXM0P][7:6]  <= (rreg[CXM0P][7:6]  | {(m0 && p1), (m0 && p0)});
+		rreg[CXM1P][7:6]  <= (rreg[CXM1P][7:6]  | {(m1 && p0), (m1 && p1)});
+		rreg[CXP0FB][7:6] <= (rreg[CXP0FB][7:6] | {(p0 && pf), (p0 && bl)});
+		rreg[CXP1FB][7:6] <= (rreg[CXP1FB][7:6] | {(p1 && pf), (p1 && bl)});
+		rreg[CXM0FB][7:6] <= (rreg[CXM0FB][7:6] | {(m0 && pf), (m0 && bl)});
+		rreg[CXM1FB][7:6] <= (rreg[CXM1FB][7:6] | {(m1 && pf), (m1 && bl)});
+		rreg[CXBLPF][7:6] <= (rreg[CXBLPF][7:6] | {(bl && pf), 1'b0});
+		rreg[CXPPMM][7:6] <= (rreg[CXPPMM][7:6] | {(p0 && p1), (m0 && m1)});
 	end
 
-	// TODO: Is this the case?
-	// if (phi2 && ~RW_n && cs && addr == VBLANK && d_in[6])
-	// 	{rreg[INPT4][7], rreg[INPT5][7]} <= '1;
+	for (logic [2:0] x = 0; x < 4; x = x + 1'd1) begin
+		rreg[{2'b10, x[1:0]}][7] <= wreg[VBLANK][7] ? 1'b0 : i[x[1:0]];
+	end
 
 	if (~wreg[VBLANK][6]) begin
 		{rreg[INPT4][7], rreg[INPT5][7]} <= '1;
@@ -1271,14 +2113,15 @@ always_ff @(posedge clk) begin : read_reg_block
 			rreg[INPT5][7] <= 0;
 	end
 
-	if (phase && cs && ~RW_n) begin
+	if (pclk.edge_p2 && cs && ~RW_n) begin
 		if (addr[3:0] == VBLANK && d_in[6]) begin
 			{rreg[INPT4][7], rreg[INPT5][7]} <= '1;
 		end
 	end
 
-	if (rst)
+	if (rst) begin
 		rreg <= '{16{8'h00}};
+	end
 end
 
 endmodule

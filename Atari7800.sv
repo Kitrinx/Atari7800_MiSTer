@@ -452,9 +452,10 @@ end
 logic tape_adc;
 logic tape_adc_act;
 
-ltc2308_tape #(.CLK_RATE(32000000)) ltc2308_tape
+ltc2308_tape #(.CLK_RATE(14318182)) ltc2308_tape
 (
   .clk(clk_sys),
+  .reset(reset),
   .ADC_BUS(ADC_BUS),
   .dout(tape_adc),
   .active(tape_adc_act)

@@ -223,7 +223,7 @@ reg old_cart_download;
 // 0         1         2         3          4         5         6
 // 01234567890123456789012345678901 23456789012345678901234567890123
 // 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
-// XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXX      XXXXXXXX
+// XXXXXXXX XXXXXXXXXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXXXXXX    XXXXXXXX
 
 `include "build_id.v"
 parameter CONF_STR = {
@@ -243,7 +243,7 @@ parameter CONF_STR = {
 	"d0P1ONQ,Crop Offset,0,2,4,8,10,12,-12,-10,-8,-6,-4,-2;",
 	"P1ORS,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"P1-;",
-	"P1O8,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	"P1oIJ,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"P1O9B,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"P1OT,Show Overscan,No,Yes;",
 	"P1OE,Show Border,Yes,No;",
@@ -1178,7 +1178,7 @@ assign VGA_SL = sl[1:0];
 wire       vcrop_en = status[22];
 wire [3:0] vcopt    = status[26:23];
 reg  [4:0] voff;
-wire [1:0] ar = {1'd0, status[8]};
+wire [1:0] ar = status[51:50];
 wire [11:0] arx,ary;
 
 always @(posedge CLK_VIDEO) begin

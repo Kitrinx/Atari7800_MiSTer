@@ -24,6 +24,7 @@ module Atari7800(
 	output logic        hsc_ram_cs,
 	input  logic  [7:0] hsc_ram_dout,
 	output logic  [7:0] dout,
+	output logic        cpu_ce,
 
 	output logic [15:0] AUDIO_R,
 	output logic [15:0] AUDIO_L,
@@ -135,14 +136,15 @@ module Atari7800(
 
 	assign RDY = maria_RDY && tia_RDY;
 	assign cpu_halt_n = (ctrl_writes == 2'd2) ? halt_n : 1'b1;
-	assign cart_read = pause ? &pause_clock : (tia_en ? read_2600 : (cart_read_flag & mclk1));
+	assign cart_read = tia_en ? (pause ? ~|pause_clock : read_2600) : ((pause ? pause_clock[0] : (cart_read_flag & mclk1)));
 	assign cart_addr_out = tia_en ? cart_2600_addr_out : cart_7800_addr_out;
 	assign cart_DB_out = tia_en ? cart_2600_DB_out : cart_7800_DB_out;
 	assign PAread = cs_riot && ~|AB[4:0] && RW && pclk0;
+	assign cpu_ce = pclk1;
 
 	// Track the open bus since FPGA's don't use bidirectional logic internally
 	always_ff @(posedge clk_sys) begin
-		pause_clock <= pause_clock + 1'd1;
+		pause_clock <= pause ? pause_clock + 1'd1 : {1'b0, mclk1};
 		open_bus <= (~RW ? write_DB : read_DB);
 		last_address <= AB;
 	end
@@ -187,7 +189,8 @@ module Atari7800(
 		.address        (loading ? clear_addr : AB[10:0]),
 		.data           (loading ? clearval : write_DB),
 		.wren           ((~RW & cs_ram0 & pclk0) || loading),
-		.q              (ram0_DB_out)
+		.q              (ram0_DB_out),
+		.cs             (~pause)
 	);
 
 	spram #(.addr_width(11), .mem_name("RAM1")) ram1
@@ -196,7 +199,8 @@ module Atari7800(
 		.address        (loading ? clear_addr : AB[10:0]),
 		.data           (loading ? clearval : write_DB),
 		.wren           ((~RW & cs_ram1 & pclk0) || loading),
-		.q              (ram1_DB_out)
+		.q              (ram1_DB_out),
+		.cs             (~pause)
 	);
 
 	// MARIA
@@ -423,7 +427,7 @@ module Atari7800(
 		.data    (reset ? 8'd0 : cartram_wrdata),
 		.wren    (reset ? 1'd1 : cartram_wr),
 		.q       (cartram_data_bram),
-		.cs      (1)
+		.cs      (~pause)
 	);
 
 	cart cart

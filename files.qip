@@ -18,6 +18,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/lightgun.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/paddles.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mouse_st.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/EEPROM_24LC256.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/detect2600.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/RIOT/M6532.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/top.sv

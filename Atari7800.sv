@@ -254,8 +254,8 @@ parameter CONF_STR = {
 	"P2OIJ,High Score Cart,Auto,On,Off;",
 	"P2O7,Swap Joysticks,No,Yes;",
 	"P2-;",
-	"P2o69,Port1 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,BoosterGrip,Robotron,SNAC;",
-	"P2oAD,Port2 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,BoosterGrip,Robotron,SNAC;",
+	"P2o69,Port1 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,BoosterGrip,Robotron,SaveKey,SNAC;",
+	"P2oAD,Port2 Input,Auto,None,Joystick,Lightgun,Paddle,Trakball,Keypad,Driving,STMouse,AmigaMouse,BoosterGrip,Robotron,SaveKey,SNAC;",
 	"h1P2O5,SNAC Analog,Yes,No;",
 	"h1P2O6,Sega Phaser Mode,No,Yes;",
 	"P2oH,Swap Paddle A<->B,No,Yes;",
@@ -469,13 +469,27 @@ wire [7:0] cartram_data;
 wire cartram_busy;
 logic [3:0] i_read;
 logic halted;
+logic use_sk;
+
+logic core_paused;
+logic freeze_sync;
+logic cpu_ce;
+
+always_ff @(posedge clk_sys) begin :core_sync
+	reg old_sync;
+	old_sync <= freeze_sync;
+	if (old_sync ^ freeze_sync)
+		core_paused <= (status[35] && OSD_STATUS) || halted;
+end
+
+assign HDMI_FREEZE = core_paused;
 
 Atari7800 main
 (
 	.clk_sys      (clk_sys),
 	.reset        (reset),
 	.loading      (cart_download || bios_download),
-	.pause        ((status[35] && OSD_STATUS) || halted),
+	.pause        (core_paused),
 
 	// Video
 	.RED          (R),
@@ -493,7 +507,7 @@ Atari7800 main
 	.tia_mode     (tia_mode && ~status[17]),
 	.bypass_bios  (~status[17]),
 	.pokey_irq    (status[7]),
-	.hsc_en       (~|status[19:18] && (|cart_save || cart_xm[0]) ? 1'b1 : status[18]),
+	.hsc_en       (~use_sk && (~|status[19:18] && (|cart_save || cart_xm[0]) ? 1'b1 : status[18])),
 	.hsc_ram_dout (hsc_ram_dout),
 	.hsc_ram_cs   (hsc_ram_cs),
 
@@ -809,16 +823,17 @@ paddle_timer pt3 (clk_sys, 1, reset || ~paddle_mask[3], {1'b0, pad_ax[3][7:0]}, 
 
 logic [7:0] mouse_x, mouse_y;
 logic dir_x, dir_y;
+logic ep_do;
 
 logic [3:0] trackball;
 logic trackball_button;
 
 wire pada_0, pada_1, padb_0, padb_1;
 
-wire is_rdiff = joya[11] | joyb[11];
-wire is_ldiff = joya[10] | joyb[10];
-wire is_halt = joya[12] | joyb[12];
-wire is_bw = (joya[6] | joyb[6]) && tia_en;
+wire is_rdiff = joya[11] | joyb[11] | keyrdiff;
+wire is_ldiff = joya[10] | joyb[10] | keyldiff;
+wire is_halt = joya[12] | joyb[12] | keyhalt;
+wire is_bw = (joya[6] | joyb[6] | keybw) && tia_en;
 
 logic old_rdiff, old_ldiff, old_bw, old_halt;
 wire toggle_rdiff = ~old_rdiff && is_rdiff;
@@ -904,7 +919,7 @@ logic key6, key5, key4; // Row 1
 logic key9, key8, key7; // Row 2
 logic keyh, key0, keya; // Row 3
 
-logic keystart, keyselect;
+logic keystart, keyselect, keyhalt, keyrdiff, keyldiff, keybw;
 
 // Follows the format of il, id[1:0], pa[3:0]
 logic [6:0] keypad0, keypad1;
@@ -964,13 +979,17 @@ always @(posedge clk_sys) begin
 			9'h72: key0 <= ps2_key[9]; // Num 2
 			9'h7A: keyh <= ps2_key[9]; // Num 3
 			
-			9'h06: keystart <= ps2_key[9];  // F2
-			9'h05: keyselect <= ps2_key[9]; // F1
+			9'h05: keyselect <= ps2_key[9];  // F1
+			9'h06: keystart  <= ps2_key[9];  // F2
+			9'h04: keybw     <= ps2_key[9];  // F3
+			9'h0C: keyldiff  <= ps2_key[9];  // F4
+			9'h03: keyrdiff  <= ps2_key[9];  // F5
+			9'h0B: keyhalt   <= ps2_key[9];  // F6
 
 		endcase
 	end
 	if (reset)
-		{key1, key2, key3, key4, key5, key6, key7, key8, key9, key0, keyh, keya, keystart, keyselect} <= '0;
+		{key1, key2, key3, key4, key5, key6, key7, key8, key9, key0, keyh, keya, keystart, keyselect, keybw, keyldiff, keyrdiff, keyhalt} <= '0;
 
 	// These have pull-ups in an undisturbed state
 	keypad0 <= '1;
@@ -997,7 +1016,7 @@ always @(posedge clk_sys) begin
 
 end
 
-wire [7:0] snac_type = 8'd11;
+wire [7:0] snac_type = 8'd12;
 wire [3:0] snac_pa_in = {USER_IN[3], USER_IN[5], USER_IN[0], (status[6] ? ~USER_IN[2] : USER_IN[1])};
 wire [1:0] snac_id_in = {USER_IN[6], USER_IN[4]} & ((~status[5] || status[6]) ? 2'b00 : 2'b11); // FIXME: These may be backwards.
 wire snac_il_in = (status[6] ? USER_IN[4] : USER_IN[2]);
@@ -1077,7 +1096,7 @@ always_comb begin
 	porta_type = |status[41:38] ? {4'd0, status[41:38] - 1'd1} : (auto_paddle ? 2'd3 : header_type0);
 	portb_type = |status[45:42] ? {4'd0, status[45:42] - 1'd1} : (auto_paddle ? 2'd3 : header_type1);
 
-	idump = tia_en ? {~joyb[5], 1'd0, ~joya[5], 1'd0} : {joyb[4], joyb[5], joya[4], joya[5]}; // P2 F1, P2 F2, P1 F1, P1 F2 or Analog
+	idump = tia_en ? {(|portb_type ? 1'b0 : ~joyb[5]), 1'd0, (|porta_type ? 1'b0 : ~joya[5]), 1'd0} : {joyb[4], joyb[5], joya[4], joya[5]}; // P2 F1, P2 F2, P1 F1, P1 F2 or Analog
 	PAin[7:4] = {~joya[0], ~joya[1], ~joya[2], ~joya[3]}; // P1: R L D U
 	PAin[3:0] = {~joyb[0], ~joyb[1], ~joyb[2], ~joyb[3]}; // P2: R L D U
 	ilatch[0] = tia_en ? ~joya[4] : ~(joya[4] || joya[5]); // P1 Fire
@@ -1095,6 +1114,7 @@ always_comb begin
 		8: begin PAin[7:4] = amiga_mouse[3:0]; ilatch[0] = ~amiga_mouse[5]; idump[1:0] = amiga_mouse[6:5]; end
 		9: begin idump[1:0] = {joya[5], joya[9]}; end
 		10: begin PAin[7:4] = robol; end
+		11: begin PAin[6] = ep_do; end
 		snac_type: begin PAin[7:4] = snac_pa_in; ilatch[0] = snac_il_in; idump[1:0] = snac_id_in[1:0]; end
 		default: ;
 	endcase
@@ -1110,6 +1130,7 @@ always_comb begin
 		8: begin PAin[3:0] = amiga_mouse[3:0]; ilatch[1] = ~amiga_mouse[5]; idump[3:2] = amiga_mouse[6:5]; end
 		9: begin idump[3:2] = {joyb[5], joyb[9]}; end
 		10: begin PAin[3:0] = robor; end
+		11: begin PAin[2] = ep_do; end
 		snac_type: if (~is_snac0) begin PAin[3:0] = snac_pa_in; ilatch[1] = snac_il_in; idump[3:2] = snac_id_in[1:0]; end
 		default: ;
 	endcase
@@ -1244,7 +1265,6 @@ video_mixer #(.LINE_LENGTH(372), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
 	.HBlank(hb_cofi),
 	.VSync(vs_cofi),
 	.VBlank(vb_cofi),
-	.freeze_sync(),
 
 	.R((gun_en & gun_target) ? 8'd255 : r_cofi),
 	.G((gun_en & gun_target) ? 8'd0 : g_cofi),
@@ -1252,7 +1272,7 @@ video_mixer #(.LINE_LENGTH(372), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
 );
 
 /////////////////////////  STATE SAVE/LOAD  /////////////////////////////
-wire bk_save_write = ~RW & hsc_ram_cs;
+wire bk_save_write = use_sk ? sk_write : (~RW & hsc_ram_cs);
 
 reg bk_pending;
 
@@ -1263,16 +1283,49 @@ always @(posedge clk_sys) begin
 		bk_pending <= 1'b0;
 end
 
-dpram_dc #(.widthad_a(11)) hsc_ram
+logic [7:0] sk_data;
+logic [14:0] sk_addr;
+logic sk_read, sk_write;
+
+logic [7:0] sk_ram_do;
+logic [14:0] sk_ram_addr;
+
+assign use_sk = porta_type == 11 || portb_type == 11;
+
+// LEFT (pin 3) SDA
+// RIGHT (pin 4) SCL
+
+EEPROM_24LC0X
+#(
+	.ADDR_WIDTH (15),
+	.PAGE_WIDTH (6)
+) savekey (
+	.clk            (clk_sys),
+	.ce             (1),
+	.reset          (reset || ~use_sk),
+	.SCL            (portb_type == 11 ? PAout[3] : PAout[7]),
+	.SDA_in         (portb_type == 11 ? PAout[2] : PAout[6]),
+	.SDA_out        (ep_do),
+	.E_id           (0),
+	.WC_n           (0),
+	.data_from_ram  (hsc_ram_dout),
+	.data_to_ram    (sk_ram_do),
+	.ram_addr       (sk_ram_addr),
+	.ram_read       (sk_read),
+	.ram_write      (sk_write),
+	.ram_done       (1)
+);
+
+dpram_dc #(.widthad_a(14)) hsc_ram
 (
 	.clock_a   (clk_sys),
-	.address_a (bios_addr),
-	.data_a    (din),
-	.wren_a    (~RW & hsc_ram_cs),
+	.address_a (use_sk ? sk_ram_addr : bios_addr),
+	.data_a    (use_sk ? sk_ram_do : din),
+	.wren_a    (use_sk ? sk_write : (~RW & hsc_ram_cs)),
 	.q_a       (hsc_ram_dout),
 
 	.clock_b   (clk_sys),
-	.address_b ({sd_lba[0][1:0],sd_buff_addr}),
+	.address_b ({sd_lba[0][5:0],sd_buff_addr}),
 	.data_b    (sd_buff_dout),
 	.wren_b    (sd_buff_wr & sd_ack),
 	.q_b       (sd_buff_din[0])
@@ -1321,7 +1374,7 @@ always @(posedge clk_sys) begin : save_block
 		end
 	end else begin
 		if(old_ack & ~sd_ack) begin
-			if(&sd_lba[0][1:0]) begin
+			if(&sd_lba[0][5:0]) begin
 				bk_loading <= 0;
 				bk_state <= 0;
 			end else begin

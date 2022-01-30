@@ -20,10 +20,10 @@ module M6532
 	output       IRQ_n,
 	input        CS1,       // Chip select 1, 1 = selected
 	input        CS2_n,     // Chip select 2, 0 = selected
-	input  [7:0] PA_in,
-	output [7:0] PA_out,
-	input  [7:0] PB_in,
-	output [7:0] PB_out,
+	input  [7:0] PA_in,     // Port ins and outs
+	output [7:0] PA_out,    // NOTE that port output must be fed back to input
+	input  [7:0] PB_in,     // if not altered by a peripheral, in order for
+	output [7:0] PB_out,    // the chip to read properly!
 	output       oe         // Output enabled (always 8 bits)
 );
 
@@ -44,8 +44,8 @@ reg edge_detect;
 assign IRQ_n = ~((interrupt[7] & irq_en[1]) | (interrupt[6] & irq_en[0]));
 
 // These wires have a weak pull up, so any undriven wires will be high
-assign PA_out = out_a;
-assign PB_out = out_b;
+assign PA_out = out_a | ~dir_a;
+assign PB_out = out_b | ~dir_b;
 
 assign oe = (CS1 & ~CS2_n) && RW_n;
 always_ff @(posedge clk) begin
@@ -56,8 +56,8 @@ always_ff @(posedge clk) begin
 			case(addr[1:0])
 				2'b01: d_out <= dir_a; // DDRA
 				2'b11: d_out <= dir_b; // DDRB
-				2'b00: d_out <= (out_a & dir_a) | (PA_in & ~dir_a); // Input A
-				2'b10: d_out <= out_b; // Input B
+				2'b00: d_out <= (PA_in & PA_out); // Input A
+				2'b10: d_out <= (PB_in & PB_out); // Input B
 			endcase
 		end else if (addr[2])begin // Timer & Interrupts
 			if (~addr[0])
@@ -93,8 +93,8 @@ always_ff @(posedge clk) if (~res_n) begin
 	else
 		riot_ram <= '{128{8'h00}};
 
-	out_a <= 8'hFF;
-	out_b <= 8'hFF;
+	out_a <= 8'h00;
+	out_b <= 8'h00;
 	dir_a <= 8'h00;
 	dir_b <= 8'h00;
 	{interrupt, irq_en, edge_detect} <= '0;
@@ -111,11 +111,7 @@ end else begin
 	
 		if (tick_inc)
 			timer <= timer - 8'd1;
-	
-		// FIXME: Port A is set such so that it can drive SNAC port output (open drain)
-		out_a <= (out_a & dir_a) | (8'hFF & ~dir_a);
-		out_b <= (out_b & dir_b) | (PB_in & ~dir_b);
-	
+
 		if (CS1 & ~CS2_n) begin
 			if (~RS_n) begin // RAM selected
 				if (~RW_n)
@@ -125,8 +121,8 @@ end else begin
 					case(addr[1:0])
 						2'b01: dir_a <= d_in; // DDRA
 						2'b11: dir_b <= d_in; // DDRB
-						2'b00: out_a <= (d_in & dir_a) | (8'hFF & ~dir_a); // Output A
-						2'b10: out_b <= (d_in & dir_b) | (PB_in & ~dir_b); // Output B
+						2'b00: out_a <= d_in; // Output A
+						2'b10: out_b <= d_in; // Output B
 					endcase
 				end
 			end else begin // Timer & Interrupts

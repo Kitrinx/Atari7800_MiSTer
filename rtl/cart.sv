@@ -322,7 +322,7 @@ end
 
 logic [3:0] ch0, ch1, ch2, ch3, ch0_2, ch1_2, ch2_2, ch3_2;
 logic [5:0] pokey_mux, pokey2_mux;
-logic [3:0] ym_ce, pokey2_cs;
+logic [3:0] pokey2_cs;
 logic using_two_pokey;
 
 always @(posedge clk_sys) begin
@@ -330,7 +330,7 @@ always @(posedge clk_sys) begin
 		using_two_pokey <= 0;
 	if (is_pokey_440)
 		using_two_pokey <= 1;
-	ym_ce <= ym_ce + 1'd1;
+
 	pokey_mux <= ch0 + ch1 + ch2 + ch3;
 	pokey2_mux <= ch0_2 + ch1_2 + ch2_2 + ch3_2;
 end

@@ -147,7 +147,7 @@ module maria(
 			pclk1 <= 0;
 			ready_int <= 1;
 			slow_clk_latch <= 0;
-			tia_enable_count <= 2; 
+			tia_enable_count <= 2;
 		end else begin
 			// if (PAL)
 			// 	pal_counter <= pal_counter + 1'd1;
@@ -156,28 +156,30 @@ module maria(
 
 			mclk1 <= 0;
 			mclk0 <= 0;
+			pclk0 <= 0;
+			pclk1 <= 0;
 			if (ce) begin
 				old_men <= maria_en;
-				
+
 				// If maria enabled rises, the CPU clock is held in a state
 				// of reset for 5 master oscillator cycles.
 				if (~old_men && maria_en) begin
 					men_count <= 5;
 				end
-				
+
 				if (mclk1 && |tia_enable_count)
 					tia_enable_count <= tia_enable_count - 1'd1;
-				
+
 				if (|men_count)
 					men_count <= men_count - 1'd1;
-	
+
 				if (mclk0) begin
 					if (pclk1)
 						pclk <= 0;
 					else if (pclk0)
 						pclk <= 1;
 				end
-	
+
 				if (pal_counter == 109) begin
 					pal_counter <= 0;
 					mclk0 <= 0;
@@ -187,25 +189,22 @@ module maria(
 					mclk1 <= ~clk_toggle;
 					clk_toggle <= ~clk_toggle;
 				end
-	
+
 				if (wsync)
 					ready_int <= 1'b0;
 				else
-	
+
 				if (lrc) begin
 					ready_int <= 1'b1;
 				end
-	
-				pclk0 <= 0;
-				pclk1 <= 0;
-	
+
 				if (pclk0)
 					slow_clk_latch <= sel_slow_clock;
-	
+
 				if (~pclk) begin
 					old_ready <= ready_int;
 				end
-	
+
 				// FIXME: Redo clocks based on combinational logic with CE
 				if (mclk1) begin
 					if (clock_div)

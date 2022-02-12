@@ -84,8 +84,8 @@ module paddle_chooser
 	logic [3:0][7:0] old_paddle;
 	logic old_stb;
 	reg  signed [8:0] mx = 0;
-	wire signed [8:0] mdx = {mouse[4],mouse[4],mouse[15:9]};
-	wire signed [8:0] mdx2 = (mdx > 15) ? 9'd15 : (mdx < -15) ? -8'd15 : mdx;
+	wire signed [8:0] mdx = {mouse[4],mouse[15:8]};
+	wire signed [8:0] mdx2 = (mdx > 64) || (mouse[6] && ~mouse[4]) ? 9'd64 : (mdx < -64) || (mouse[6] && mouse[4]) ? -8'd64 : mdx;
 	wire signed [8:0] nmx = mx + mdx2;
 	
 	assign mouse_button = mouse[0];

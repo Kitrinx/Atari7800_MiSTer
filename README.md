@@ -43,7 +43,7 @@ Some games use the [difficulty switches](https://atariage.com/forums/topic/23591
 - BupChip music chip is not implemented because it runs on a modern microcontroller.
 
 ## Special Thanks
-- Mark Saarna for his enormous knowledge of the system and patient help.
+- Mike Saarna for his enormous knowledge of the system and patient help.
 - Osman Celimli for his DMA timing traces and experience.
 - Robert Tuccitto for the extensive palette information.
 - Remowilliams for testing a zillion games for me on real hardware.

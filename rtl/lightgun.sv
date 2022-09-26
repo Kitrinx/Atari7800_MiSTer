@@ -86,7 +86,8 @@ always @(posedge CLK) begin
 		end
 	end
 	else begin
-		lg_x <= j_x + j_x[8:1];
+		if (H_WIDTH[8]) lg_x <= j_x + j_x[8:1] - j_x[8:4] + j_x[8:6]; // 372 horizontal pixels
+		else lg_x <= j_x - j_x[8:2] - j_x[8:3];                       // 160 horizontal pixels
 
 		if(j_y < 8) lg_y <= 0;
 		else if((j_y - 9'd8) > vtotal) lg_y <= vtotal;
